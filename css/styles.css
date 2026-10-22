@@ -179,6 +179,25 @@ textarea[readonly] { background: var(--surface-2); }
   clip-path: polygon(0 100%, 35% 10%, 60% 60%, 75% 35%, 100% 100%);
 }
 
+.topbar-actions { display: flex; align-items: center; gap: 14px; }
+.repo-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--muted); text-decoration: none; font-size: 14px;
+}
+.repo-link:hover { color: var(--text); }
+@media (max-width: 480px) {
+  .repo-label { display: none; }
+  .brand { font-size: 16px; white-space: nowrap; }
+  .topbar-actions { gap: 10px; }
+}
+@media (max-width: 400px) {
+  .key-label { display: none; }
+}
+
+.icon { flex: none; vertical-align: -2px; }
+.licensed { color: var(--star); margin-right: 5px; }
+.chip.licensed-chip { display: inline-flex; align-items: center; gap: 4px; color: var(--star); border-color: currentColor; }
+
 .key-pill {
   border: 1px solid var(--warn-border);
   background: var(--warn-soft);

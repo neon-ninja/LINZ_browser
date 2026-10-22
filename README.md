@@ -15,7 +15,7 @@ talks to the LINZ APIs directly from your browser.
   by relevance, popularity, recent updates or name.
 - **Licensed datasets.** With your key saved, search also finds datasets LINZ
   has licensed to you, such as *NZ Property Titles Including Owners*. These
-  can be queried like any other dataset.
+  are marked with a lock icon and can be queried like any other dataset.
 - **API key remembered in your browser.** Paste your LDS key once; it's kept in
   `localStorage` and only ever sent to `data.linz.govt.nz`. A *Test* button
   checks it with LINZ.
@@ -103,10 +103,13 @@ sends the key in an `Authorization: key …` header rather than LINZ's
 request URL* button still gives you the key-in-URL form so the link works on its
 own).
 
-Licensed datasets are hidden from anonymous catalogue requests, and reading
-their details needs a key with the `layers:read` scope. Without that scope the
-app reads their fields from WFS `DescribeFeatureType` instead, so they can still
-be queried; only the description, extent and feature count are missing.
+Licensed datasets are hidden from anonymous catalogue requests, which is also
+how the app spots them for the lock icon: after a keyed search it asks the
+catalogue anonymously for the same IDs (`/data/?id=…&id=…`), and any it can't
+see are licensed. Reading their details needs a key with the `layers:read`
+scope. Without that scope the app reads their fields from WFS
+`DescribeFeatureType` instead, so they can still be queried; only the
+description, extent and feature count are missing.
 
 The `SRID=4326;` prefix on points matters: without it LINZ reads the point in
 the layer's own coordinate system, which for NZGD2000 layers swaps the axes.

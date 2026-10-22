@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  datasetFromSchema, featureParams, flattenCategories, normaliseDataset, parseNumberMatched,
+  datasetFromSchema, featureParams, findLicensed, flattenCategories, normaliseDataset, parseNumberMatched,
   parseResourceRange, parseServiceError, queryApiUrl, rankAddresses, standaloneWfsUrl, typeName, wfsUrl, xsdFieldType,
 } from '../js/linz.js';
 
@@ -175,4 +175,25 @@ test('rankAddresses puts prefix matches first, then shorter ones', () => {
 
 test('parseServiceError keeps short plain-text errors', () => {
   assert.equal(parseServiceError('invalid-api-key: Provide a valid api key'), 'invalid-api-key: Provide a valid api key');
+});
+
+test('findLicensed reports IDs the anonymous catalogue hides, in batches, with caching', async (t) => {
+  const publicIds = new Set([1001, 1003]);
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const ids = new URL(url).searchParams.getAll('id').map(Number);
+    requests.push(ids);
+    const body = ids.filter((id) => publicIds.has(id)).map((id) => ({ id, type: 'layer', title: `Layer ${id}` }));
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+
+  assert.deepEqual([...await findLicensed([1001, 1002, 1003, 1004])], [1002, 1004]);
+  assert.equal(requests.length, 1);
+  // Known IDs aren't asked about again.
+  assert.deepEqual([...await findLicensed([1002, 1003])], [1002]);
+  assert.equal(requests.length, 1);
+
+  const many = Array.from({ length: 150 }, (_, i) => 2000 + i);
+  assert.equal((await findLicensed(many)).size, 150);
+  assert.deepEqual(requests.slice(1).map((r) => r.length), [100, 50]);
 });

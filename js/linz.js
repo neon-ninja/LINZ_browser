@@ -62,17 +62,43 @@ async function fetchJson(url, { signal, apiKey } = {}) {
 // scope). Requests with those keys fall back to anonymous ones.
 const catalogueRejectedKeys = new Set();
 
-/** Catalogue request with the user's key when LINZ accepts it, otherwise anonymous. */
+/**
+ * Catalogue request with the user's key when LINZ accepts it, otherwise anonymous.
+ * @returns {Promise<{res: Response, withKey: boolean}>}
+ */
 async function fetchCatalogue(url, { signal, apiKey } = {}) {
   if (apiKey && !catalogueRejectedKeys.has(apiKey)) {
     try {
-      return await fetchJson(url, { signal, apiKey });
+      return { res: await fetchJson(url, { signal, apiKey }), withKey: true };
     } catch (err) {
       if (err.status !== 401 && err.status !== 403) throw err;
       catalogueRejectedKeys.add(apiKey);
     }
   }
-  return fetchJson(url, { signal });
+  return { res: await fetchJson(url, { signal }), withKey: false };
+}
+
+// Whether each catalogue ID is visible anonymously (IDs are unique across layers and tables).
+const publicIds = new Map();
+
+/**
+ * The IDs among `ids` that anonymous users can't see: licensed datasets, such
+ * as titles with owners, that LINZ has granted to the key's owner. Asks the
+ * catalogue anonymously, in batches, and remembers the answers.
+ * @returns {Promise<Set<number>>}
+ */
+export async function findLicensed(ids, { signal } = {}) {
+  const unknown = [...new Set(ids)].filter((id) => !publicIds.has(id));
+  for (let i = 0; i < unknown.length; i += 100) {
+    const batch = unknown.slice(i, i + 100);
+    const params = new URLSearchParams();
+    for (const id of batch) params.append('id', String(id));
+    params.set('page_size', String(batch.length));
+    const res = await fetchJson(`${API}/data/?${params}`, { signal });
+    const visible = new Set((await res.json()).map((item) => item.id));
+    for (const id of batch) publicIds.set(id, visible.has(id));
+  }
+  return new Set(ids.filter((id) => publicIds.get(id) === false));
 }
 
 function summarise(item) {
@@ -102,9 +128,19 @@ export async function searchDatasets({
   params.set('page', String(page));
   params.set('page_size', String(pageSize));
 
-  const res = await fetchCatalogue(`${API}/data/?${params}`, { signal, apiKey });
+  const { res, withKey } = await fetchCatalogue(`${API}/data/?${params}`, { signal, apiKey });
   const items = (await res.json()).map(summarise);
   const range = parseResourceRange(res.headers.get('x-resource-range'));
+  // Only keyed searches can include licensed datasets. If the check fails the
+  // results still show, just without the licensed flag.
+  if (withKey && items.length) {
+    try {
+      const licensed = await findLicensed(items.map((item) => item.id), { signal });
+      for (const item of items) item.licensed = licensed.has(item.id);
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+    }
+  }
   return {
     items,
     total: range ? range.total : items.length,
@@ -158,6 +194,7 @@ export function normaliseDataset(d) {
     featureCount: Number.isFinite(data.feature_count) ? data.feature_count : null,
     crs: data.crs?.id || null,
     extent: geometryBounds(data.extent),
+    licensed: false,
   };
 }
 
@@ -203,11 +240,12 @@ export function datasetFromSchema(type, id, schema, title) {
     crs: null,
     extent: null,
     detailsHidden: true,
+    licensed: true,
   };
 }
 
 async function findTitle(id, apiKey) {
-  const res = await fetchCatalogue(`${API}/data/?id=${encodeURIComponent(id)}`, { apiKey });
+  const { res } = await fetchCatalogue(`${API}/data/?id=${encodeURIComponent(id)}`, { apiKey });
   return (await res.json()).find((item) => item.id === id)?.title || null;
 }
 
@@ -232,6 +270,7 @@ async function loadDataset(type, id, apiKey) {
     // fields to any key that may query the dataset.
     if (err.status !== 404 || !apiKey) throw err;
     return load(apiKey)
+      .then((dataset) => ({ ...dataset, licensed: true }))
       .catch(() => describeWithWfs(type, id, apiKey))
       .catch(() => { throw err; });
   }

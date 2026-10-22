@@ -1,9 +1,9 @@
 import { buildFilter, operatorArity, operatorsFor } from './cql.js';
-import { $, el } from './dom.js';
+import { $, el, svgIcon } from './dom.js';
 import { pointOnSurface } from './geo.js';
 import {
-  ADDRESS_LAYER, API_KEY_HELP_URL, LDS_ORIGIN, addressesForFeature, countFeatures, getCategories, getDataset,
-  getFeatures, sampleValues, searchDatasets, standaloneWfsUrl, testApiKey, typeName,
+  ADDRESS_LAYER, API_KEY_HELP_URL, LDS_ORIGIN, addressesForFeature, countFeatures, findLicensed, getCategories,
+  getDataset, getFeatures, sampleValues, searchDatasets, standaloneWfsUrl, testApiKey, typeName,
 } from './linz.js';
 import { createLookup } from './lookup.js';
 import { load, loadQuery, save, saveQuery } from './storage.js';
@@ -14,6 +14,15 @@ const dateFormat = new Intl.DateTimeFormat('en-NZ', { day: 'numeric', month: 'sh
 function formatDate(iso) {
   const d = iso ? new Date(iso) : null;
   return d && !Number.isNaN(d.getTime()) ? dateFormat.format(d) : '';
+}
+
+// Octicons "lock" (MIT licence).
+const LOCK_ICON = 'M4 4a4 4 0 0 1 8 0v2h.25c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.784 2.784 6 3.75 6H4Zm8.25 3.5h-8.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25ZM10.5 6V4a2.5 2.5 0 1 0-5 0v2Z';
+const LICENSED_NOTE = 'Licensed dataset: only available to API keys that LINZ has granted access to';
+
+function licensedBadge() {
+  return el('span', { class: 'licensed', title: LICENSED_NOTE },
+    svgIcon(LOCK_ICON), el('span', { class: 'visually-hidden' }, 'Licensed: '));
 }
 
 const KIND_LABELS = { vector: 'Vector layer', table: 'Table', raster: 'Raster layer', grid: 'Grid layer' };
@@ -44,8 +53,10 @@ let pendingQuery = null;
 
 function renderKeyState() {
   const pill = $('key-button');
+  pill.title = 'API key settings';
   if (state.apiKey) {
-    pill.textContent = `API key ••••${state.apiKey.slice(-4)}`;
+    // The label is hidden on narrow screens, leaving just the masked key.
+    pill.replaceChildren(el('span', { class: 'key-label' }, 'API key '), `••••${state.apiKey.slice(-4)}`);
     pill.classList.add('has-key');
   } else {
     pill.textContent = 'Add API key';
@@ -124,12 +135,28 @@ function toggleFavourite(d) {
   if (isFavourite(d)) {
     state.favourites = state.favourites.filter((f) => !(f.type === d.type && f.id === d.id));
   } else {
-    state.favourites = [...state.favourites, { id: d.id, type: d.type, title: d.title, addedAt: Date.now() }];
+    state.favourites = [...state.favourites, {
+      id: d.id, type: d.type, title: d.title, licensed: d.licensed, addedAt: Date.now(),
+    }];
   }
   save('favourites', state.favourites);
   renderFavourites();
   renderSearchResults();
   renderFavouriteButton();
+  if (state.favourites.some((f) => f.licensed === undefined)) refreshFavouriteLicences();
+}
+
+/** Works out which favourites are licensed (older favourites didn't record it). */
+async function refreshFavouriteLicences() {
+  if (!state.favourites.length) return;
+  try {
+    const licensed = await findLicensed(state.favourites.map((f) => f.id));
+    state.favourites = state.favourites.map((f) => ({ ...f, licensed: licensed.has(f.id) }));
+    save('favourites', state.favourites);
+    renderFavourites();
+  } catch {
+    // The lock icons are a nicety; favourites work without them.
+  }
 }
 
 function starButton(d) {
@@ -156,7 +183,7 @@ function datasetItem(d, sub) {
         else location.hash = hash;
       },
     },
-    el('span', { class: 'title' }, d.title),
+    el('span', { class: 'title' }, d.licensed && licensedBadge(), d.title),
     el('span', { class: 'sub' }, sub)),
     starButton(d));
 }
@@ -420,7 +447,10 @@ function renderDataset() {
     d.publishedAt && `Updated ${formatDate(d.publishedAt)}`,
     d.license?.title,
   ].filter(Boolean);
-  $('ds-meta').replaceChildren(...chips.map((c) => el('span', { class: 'chip' }, c)));
+  $('ds-meta').replaceChildren(
+    ...(d.licensed ? [el('span', { class: 'chip licensed-chip', title: LICENSED_NOTE }, svgIcon(LOCK_ICON), 'Licensed')] : []),
+    ...chips.map((c) => el('span', { class: 'chip' }, c)),
+  );
   $('ds-link').href = d.url;
   renderFavouriteButton();
 
@@ -1222,6 +1252,7 @@ function init() {
   $('ds-favourite').addEventListener('click', () => toggleFavourite(state.dataset));
   renderKeyState();
   renderFavourites();
+  refreshFavouriteLicences();
   selectTab(load('tab', 'search') === 'favourites' && state.favourites.length ? 'favourites' : 'search');
   window.addEventListener('hashchange', route);
   route();
