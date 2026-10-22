@@ -1,7 +1,7 @@
 import { buildFilter, operatorArity, operatorsFor } from './cql.js';
 import {
-  API_KEY_HELP_URL, LDS_ORIGIN, countFeatures, getDataset, getFeatures, sampleValues,
-  searchDatasets, standaloneWfsUrl, testApiKey, typeName,
+  API_KEY_HELP_URL, LDS_ORIGIN, countFeatures, getCategories, getDataset, getFeatures,
+  sampleValues, searchDatasets, standaloneWfsUrl, testApiKey, typeName,
 } from './linz.js';
 import { load, loadQuery, save, saveQuery } from './storage.js';
 
@@ -36,7 +36,10 @@ const KIND_LABELS = { vector: 'Vector layer', table: 'Table', raster: 'Raster la
 const state = {
   apiKey: load('apiKey', ''),
   favourites: load('favourites', []),
-  search: { q: '', kinds: 'vector,table', sort: '', page: 1, items: [], total: 0, hasMore: false, loaded: false },
+  search: {
+    q: '', kinds: 'vector,table', category: '', sort: '', page: 1, items: [], total: 0, hasMore: false, loaded: false,
+  },
+  categories: [],
   dataset: null,
   query: null,
   results: null,
@@ -85,7 +88,10 @@ function setApiKey(key) {
   state.apiKey = key;
   save('apiKey', key || null);
   renderKeyState();
-  if (key && key !== previous && state.dataset && !state.results) runQuery();
+  if (key === previous) return;
+  runSearch();
+  if (!state.dataset) route();
+  else if (key && !state.results) runQuery();
 }
 
 function initKeyDialog() {
@@ -206,8 +212,10 @@ async function runSearch({ append = false } = {}) {
     const result = await searchDatasets({
       q: s.q,
       kinds: s.kinds.split(','),
+      category: s.category,
       sort: s.sort || (s.q.trim() ? '' : 'popularity'),
       page,
+      apiKey: state.apiKey,
       signal: searchController.signal,
     });
     s.page = page;
@@ -228,13 +236,24 @@ function renderSearchResults() {
   const s = state.search;
   if (!s.loaded) return;
   const label = s.total === 1 ? 'dataset' : 'datasets';
+  const category = state.categories.find((c) => c.key === s.category);
   $('search-status').textContent = !s.total
-    ? 'No datasets match. Try other words.'
-    : `${numberFormat.format(s.total)} ${label}${s.q.trim() ? ` matching “${s.q.trim()}”` : ''}`;
+    ? 'No datasets match. Try other words or another category.'
+    : `${numberFormat.format(s.total)} ${label}${s.q.trim() ? ` matching “${s.q.trim()}”` : ''}${category ? ` in ${category.name}` : ''}`;
   $('search-results').replaceChildren(...s.items.map((d) => datasetItem(d,
     [d.type === 'table' ? `Table ${d.id}` : `Layer ${d.id}`, d.publishedAt && `updated ${formatDate(d.publishedAt)}`]
       .filter(Boolean).join(' · '))));
   $('load-more').hidden = !s.hasMore;
+}
+
+async function loadCategories() {
+  try {
+    state.categories = await getCategories();
+  } catch {
+    return; // Searching still works without the category filter.
+  }
+  $('search-category').append(...state.categories.map((c) =>
+    el('option', { value: c.key }, `${'\u2003'.repeat(c.depth)}${c.name}`)));
 }
 
 function initSearch() {
@@ -254,6 +273,7 @@ function initSearch() {
     runSearch();
   });
   $('search-kind').addEventListener('change', (e) => { state.search.kinds = e.target.value; runSearch(); });
+  $('search-category').addEventListener('change', (e) => { state.search.category = e.target.value; runSearch(); });
   $('search-sort').addEventListener('change', (e) => { state.search.sort = e.target.value; runSearch(); });
   $('load-more').addEventListener('click', () => runSearch({ append: true }));
   $('tab-search').addEventListener('click', () => selectTab('search'));
@@ -339,7 +359,7 @@ async function openDataset(type, id) {
   $('dataset-error').hidden = true;
   $('dataset-body').hidden = true;
   try {
-    const dataset = await getDataset(type, id);
+    const dataset = await getDataset(type, id, { apiKey: state.apiKey });
     if (token !== datasetToken) return;
     if (!['vector', 'table'].includes(dataset.kind)) {
       throw new Error(`“${dataset.title}” is a ${KIND_LABELS[dataset.kind]?.toLowerCase() || dataset.kind}. Only vector layers and tables can be queried here.`);
@@ -353,7 +373,10 @@ async function openDataset(type, id) {
   } catch (err) {
     if (token !== datasetToken) return;
     state.dataset = null;
-    $('dataset-error').textContent = `Couldn't open this dataset. ${err.message}`;
+    const hint = err.status === 404 && !state.apiKey
+      ? ' If it is a licensed dataset, add an API key that has access to it.'
+      : '';
+    $('dataset-error').textContent = `Couldn't open this dataset. ${err.message}${hint}`;
     $('dataset-error').hidden = false;
   } finally {
     if (token === datasetToken) $('dataset-loading').hidden = true;
@@ -391,9 +414,16 @@ function renderDataset() {
   $('ds-link').href = d.url;
   renderFavouriteButton();
 
-  $('ds-description').replaceChildren(d.descriptionHtml
-    ? sanitiseHtml(d.descriptionHtml)
-    : el('p', { class: 'muted' }, 'No description.'));
+  let description;
+  if (d.detailsHidden) {
+    description = el('p', { class: 'muted' },
+      'LINZ doesn’t share this dataset’s catalogue details with your API key, so its fields were read from the WFS service instead. ',
+      'Give your key the “layers:read” scope for the full description, or ',
+      el('a', { href: d.url, target: '_blank', rel: 'noopener' }, 'see it on LINZ'), '.');
+  } else {
+    description = d.descriptionHtml ? sanitiseHtml(d.descriptionHtml) : el('p', { class: 'muted' }, 'No description.');
+  }
+  $('ds-description').replaceChildren(description);
 
   $('ds-field-count').textContent = `(${d.fields.length})`;
   $('ds-fields').replaceChildren(...d.fields.map((f) => el('tr', {},
@@ -976,6 +1006,7 @@ function init() {
   initSearch();
   initQueryBuilder();
   initResults();
+  loadCategories();
   $('ds-favourite').addEventListener('click', () => toggleFavourite(state.dataset));
   renderKeyState();
   renderFavourites();

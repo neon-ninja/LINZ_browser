@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  featureParams, geometryBounds, normaliseDataset, parseNumberMatched, parseResourceRange,
-  parseServiceError, standaloneWfsUrl, typeName, wfsUrl,
+  datasetFromSchema, featureParams, flattenCategories, geometryBounds, normaliseDataset, parseNumberMatched,
+  parseResourceRange, parseServiceError, standaloneWfsUrl, typeName, wfsUrl, xsdFieldType,
 } from '../js/linz.js';
 
 test('parseResourceRange', () => {
@@ -98,4 +98,63 @@ test('normaliseDataset and typeName', () => {
   assert.equal(typeName(table), 'table-114085');
   assert.equal(table.geometryField, null);
   assert.equal(table.url, 'https://data.linz.govt.nz/table/114085/');
+});
+
+test('flattenCategories lists children after their parent, to a depth limit', () => {
+  const tree = [
+    { key: 'gazetteer', name: 'Gazetteer', children: [] },
+    {
+      key: 'property-ownership-boundaries',
+      name: 'Property Ownership & Boundaries',
+      children: [{
+        key: 'property-ownership-boundaries/titles-owners',
+        name: 'Titles & Owners',
+        children: [{ key: 'too/deep', name: 'Too deep', children: [] }],
+      }],
+    },
+  ];
+  assert.deepEqual(flattenCategories(tree), [
+    { key: 'gazetteer', name: 'Gazetteer', depth: 0 },
+    { key: 'property-ownership-boundaries', name: 'Property Ownership & Boundaries', depth: 0 },
+    { key: 'property-ownership-boundaries/titles-owners', name: 'Titles & Owners', depth: 1 },
+  ]);
+});
+
+test('xsdFieldType maps DescribeFeatureType types', () => {
+  assert.equal(xsdFieldType('xsd:int'), 'integer');
+  assert.equal(xsdFieldType('xsd:long'), 'bigint');
+  assert.equal(xsdFieldType('xsd:double'), 'double');
+  assert.equal(xsdFieldType('xsd:decimal'), 'numeric');
+  assert.equal(xsdFieldType('xsd:date-time'), 'datetime');
+  assert.equal(xsdFieldType('xsd:date'), 'date');
+  assert.equal(xsdFieldType('xsd:boolean'), 'boolean');
+  assert.equal(xsdFieldType('xsd:string'), 'string');
+  assert.equal(xsdFieldType('gml:MultiPolygon'), 'geometry');
+});
+
+test('datasetFromSchema builds a fields-only dataset', () => {
+  const schema = {
+    featureTypes: [{
+      typeName: 'layer-50805',
+      properties: [
+        { name: 'id', type: 'xsd:int' },
+        { name: 'issue_date', type: 'xsd:date-time' },
+        { name: 'shape', type: 'gml:MultiPolygon' },
+      ],
+    }],
+  };
+  const d = datasetFromSchema('layer', 50805, schema, 'NZ Property Titles Including Owners');
+  assert.equal(d.title, 'NZ Property Titles Including Owners');
+  assert.equal(d.kind, 'vector');
+  assert.equal(d.geometryField, 'shape');
+  assert.equal(d.geometryType, 'multipolygon');
+  assert.deepEqual(d.fields.map((f) => [f.name, f.type, f.kind]),
+    [['id', 'integer', 'number'], ['issue_date', 'datetime', 'date'], ['shape', 'geometry', 'geometry']]);
+  assert.equal(d.detailsHidden, true);
+  assert.equal(d.url, 'https://data.linz.govt.nz/layer/50805/');
+
+  const table = datasetFromSchema('table', 51564, { featureTypes: [{ properties: [{ name: 'owner_type', type: 'xsd:string' }] }] }, null);
+  assert.equal(table.kind, 'table');
+  assert.equal(table.title, 'table-51564');
+  assert.equal(table.geometryField, null);
 });

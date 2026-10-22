@@ -1,6 +1,7 @@
 // Thin client for the two LINZ Data Service APIs the browser uses:
-//  - the Koordinates catalogue API (public, no key) for searching datasets and
-//    reading their field definitions, and
+//  - the Koordinates catalogue API for searching datasets and reading their
+//    field definitions (public; the user's key, when given, adds datasets
+//    licensed to them), and
 //  - the WFS service (needs the user's API key) for querying features.
 // Both send `Access-Control-Allow-Origin: *`, so they are called directly
 // from the browser. The key goes in an `Authorization: key …` header rather
@@ -44,14 +45,31 @@ export function parseServiceError(text) {
     .trim();
 }
 
-
-async function fetchJson(url, { signal } = {}) {
-  const res = await fetch(url, { signal, credentials: 'omit' });
+async function fetchJson(url, { signal, apiKey } = {}) {
+  const headers = apiKey ? { Authorization: `key ${apiKey}` } : undefined;
+  const res = await fetch(url, { signal, credentials: 'omit', headers });
   if (!res.ok) {
     const message = parseServiceError(await res.text()) || res.statusText;
     throw new LdsError(`LINZ returned ${res.status}${message ? `: ${message}` : ''}`, res.status);
   }
   return res;
+}
+
+// Keys LINZ refused for catalogue requests (invalid, or lacking the catalogue
+// scope). Requests with those keys fall back to anonymous ones.
+const catalogueRejectedKeys = new Set();
+
+/** Catalogue request with the user's key when LINZ accepts it, otherwise anonymous. */
+async function fetchCatalogue(url, { signal, apiKey } = {}) {
+  if (apiKey && !catalogueRejectedKeys.has(apiKey)) {
+    try {
+      return await fetchJson(url, { signal, apiKey });
+    } catch (err) {
+      if (err.status !== 401 && err.status !== 403) throw err;
+      catalogueRejectedKeys.add(apiKey);
+    }
+  }
+  return fetchJson(url, { signal });
 }
 
 function summarise(item) {
@@ -66,17 +84,22 @@ function summarise(item) {
 
 /**
  * Searches the catalogue for queryable datasets (vector layers and tables).
+ * With an API key, datasets licensed to the key's owner (such as titles with
+ * owners) are included; anonymous searches only see public data.
  * @returns {Promise<{items: object[], total: number, hasMore: boolean}>}
  */
-export async function searchDatasets({ q = '', kinds = ['vector', 'table'], sort = '', page = 1, pageSize = 30, signal } = {}) {
+export async function searchDatasets({
+  q = '', kinds = ['vector', 'table'], category = '', sort = '', page = 1, pageSize = 30, apiKey = '', signal,
+} = {}) {
   const params = new URLSearchParams();
   if (q.trim()) params.set('q', q.trim());
   for (const kind of kinds) params.append('kind', kind);
+  if (category) params.set('category', category);
   if (sort) params.set('sort', sort);
   params.set('page', String(page));
   params.set('page_size', String(pageSize));
 
-  const res = await fetchJson(`${API}/data/?${params}`, { signal });
+  const res = await fetchCatalogue(`${API}/data/?${params}`, { signal, apiKey });
   const items = (await res.json()).map(summarise);
   const range = parseResourceRange(res.headers.get('x-resource-range'));
   return {
@@ -84,6 +107,32 @@ export async function searchDatasets({ q = '', kinds = ['vector', 'table'], sort
     total: range ? range.total : items.length,
     hasMore: range ? range.end < range.total : false,
   };
+}
+
+/** Catalogue categories as a flat list, children after their parent, to `maxDepth` levels. */
+export function flattenCategories(categories, maxDepth = 2) {
+  const out = [];
+  const walk = (list, depth) => {
+    for (const c of list || []) {
+      out.push({ key: c.key, name: c.name, depth });
+      if (depth + 1 < maxDepth) walk(c.children, depth + 1);
+    }
+  };
+  walk(categories, 0);
+  return out;
+}
+
+let categoriesPromise = null;
+
+export function getCategories() {
+  categoriesPromise ??= fetchJson(`${API}/categories/`)
+    .then((res) => res.json())
+    .then((list) => flattenCategories(list))
+    .catch((err) => {
+      categoriesPromise = null;
+      throw err;
+    });
+  return categoriesPromise;
 }
 
 /** [[south, west], [north, east]] of a GeoJSON geometry's coordinates, or null. */
@@ -124,16 +173,92 @@ export function normaliseDataset(d) {
   };
 }
 
+/** Maps a WFS DescribeFeatureType type (`xsd:int`, `gml:MultiPolygon`, …) to an LDS field type. */
+export function xsdFieldType(type) {
+  if (/^gml:/i.test(type)) return 'geometry';
+  const t = String(type || '').replace(/^\w+:/, '').toLowerCase();
+  if (['int', 'integer', 'short', 'byte'].includes(t)) return 'integer';
+  if (t === 'long') return 'bigint';
+  if (t === 'double' || t === 'float') return 'double';
+  if (t === 'decimal') return 'numeric';
+  if (t === 'date-time' || t === 'datetime') return 'datetime';
+  if (t === 'date') return 'date';
+  if (t === 'boolean') return 'boolean';
+  return 'string';
+}
+
+/**
+ * Builds a dataset record from a WFS DescribeFeatureType (JSON) response, for
+ * datasets whose catalogue details LINZ won't share. Only the fields are known.
+ */
+export function datasetFromSchema(type, id, schema, title) {
+  const properties = schema?.featureTypes?.[0]?.properties || [];
+  const fields = properties.map((p) => {
+    const fieldType = xsdFieldType(p.type);
+    return { name: p.name, type: fieldType, kind: fieldKind(fieldType) };
+  });
+  const geometry = properties.find((p) => /^gml:/i.test(p.type));
+  return {
+    id,
+    type,
+    kind: geometry ? 'vector' : 'table',
+    title: title || `${type}-${id}`,
+    descriptionHtml: '',
+    url: `${LDS_ORIGIN}/${type}/${id}/`,
+    group: null,
+    license: null,
+    publishedAt: null,
+    fields,
+    geometryField: geometry?.name || null,
+    geometryType: geometry ? geometry.type.replace(/^gml:/i, '').toLowerCase() : null,
+    featureCount: null,
+    crs: null,
+    extent: null,
+    detailsHidden: true,
+  };
+}
+
+async function findTitle(id, apiKey) {
+  const res = await fetchCatalogue(`${API}/data/?id=${encodeURIComponent(id)}`, { apiKey });
+  return (await res.json()).find((item) => item.id === id)?.title || null;
+}
+
+async function describeWithWfs(type, id, apiKey) {
+  const name = `${type}-${id}`;
+  const [schema, title] = await Promise.all([
+    wfsRequest(wfsUrl({ request: 'DescribeFeatureType', typeNames: name, outputFormat: 'application/json' }), apiKey),
+    findTitle(id, apiKey).catch(() => null),
+  ]);
+  return datasetFromSchema(type, id, schema, title);
+}
+
+async function loadDataset(type, id, apiKey) {
+  const url = `${API}/${type === 'table' ? 'tables' : 'layers'}/${encodeURIComponent(id)}/`;
+  const load = (key) => fetchJson(url, { apiKey: key }).then((res) => res.json()).then(normaliseDataset);
+  try {
+    return await load();
+  } catch (err) {
+    // Licensed datasets (e.g. titles with owners) are hidden from anonymous
+    // catalogue requests. Ask again with the key; keys without the
+    // `layers:read` scope are refused that too, but WFS still describes the
+    // fields to any key that may query the dataset.
+    if (err.status !== 404 || !apiKey) throw err;
+    return load(apiKey)
+      .catch(() => describeWithWfs(type, id, apiKey))
+      .catch(() => { throw err; });
+  }
+}
+
 const datasetCache = new Map();
 
-/** Fetches (and caches) the full record for a layer or table, including its fields. */
-export async function getDataset(type, id, { signal } = {}) {
+/**
+ * Fetches (and caches) a layer or table's record, including its fields. The
+ * API key is only used for datasets that aren't public.
+ */
+export async function getDataset(type, id, { apiKey = '' } = {}) {
   const cacheKey = `${type}-${id}`;
   if (!datasetCache.has(cacheKey)) {
-    const path = type === 'table' ? 'tables' : 'layers';
-    const promise = fetchJson(`${API}/${path}/${encodeURIComponent(id)}/`, { signal })
-      .then((res) => res.json())
-      .then(normaliseDataset);
+    const promise = loadDataset(type, id, apiKey);
     datasetCache.set(cacheKey, promise);
     promise.catch(() => datasetCache.delete(cacheKey));
   }

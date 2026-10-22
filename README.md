@@ -10,8 +10,12 @@ talks to the LINZ APIs directly from your browser.
 
 ## Features
 
-- **Search the catalogue** for vector layers and tables, sorted by relevance,
-  popularity, recent updates or name.
+- **Search the catalogue** for vector layers and tables, filtered by LINZ
+  category (e.g. *Property Ownership & Boundaries → Titles & Owners*) and sorted
+  by relevance, popularity, recent updates or name.
+- **Licensed datasets.** With your key saved, search also finds datasets LINZ
+  has licensed to you, such as *NZ Property Titles Including Owners*. These
+  can be queried like any other dataset.
 - **API key remembered in your browser.** Paste your LDS key once; it's kept in
   `localStorage` and only ever sent to `data.linz.govt.nz`. A *Test* button
   checks it with LINZ.
@@ -67,8 +71,10 @@ GitHub Pages → Run workflow).
 
 | What | LINZ API |
 | --- | --- |
-| Search datasets | Catalogue API: `GET /services/api/v1.x/data/?q=…&kind=vector&kind=table` (no key) |
-| Fields, types, geometry, extent | Catalogue API: `GET /services/api/v1.x/layers/{id}/` or `/tables/{id}/` (no key) |
+| Search datasets | Catalogue API: `GET /services/api/v1.x/data/?q=…&kind=vector&kind=table&category=…`, with your key if LINZ accepts it there, so licensed datasets are included |
+| Categories | Catalogue API: `GET /services/api/v1.x/categories/` |
+| Fields, types, geometry, extent | Catalogue API: `GET /services/api/v1.x/layers/{id}/` or `/tables/{id}/` |
+| Fields of licensed datasets | WFS `DescribeFeatureType` (used when the catalogue won't describe a dataset to your key) |
 | Query features | WFS 2.0 `GetFeature` with `cql_filter`, `propertyName`, `sortBy`, `count`, `startIndex`, `outputFormat=application/json`, `srsName=EPSG:4326` |
 | Total matches | WFS `GetFeature` with `resultType=hits` |
 | Check a key | WFS `GetCapabilities` (401 for an unknown key) |
@@ -78,6 +84,11 @@ sends the key in an `Authorization: key …` header rather than LINZ's
 `/services;key=…/wfs` URL form, which keeps it out of request URLs (the *Copy
 request URL* button still gives you the key-in-URL form so the link works on its
 own).
+
+Licensed datasets are hidden from anonymous catalogue requests, and reading
+their details needs a key with the `layers:read` scope. Without that scope the
+app reads their fields from WFS `DescribeFeatureType` instead, so they can still
+be queried; only the description, extent and feature count are missing.
 
 WFS has no "distinct values" request, so value suggestions are built by fetching
 a field in small batches, each excluding the values already found, until a
