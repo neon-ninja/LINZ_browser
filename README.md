@@ -54,8 +54,14 @@ python3 -m http.server 8000      # or: npm start
 # then open http://localhost:8000
 ```
 
-To publish it, enable GitHub Pages for the repository (Settings → Pages →
-Deploy from a branch → `main`, `/ (root)`). Nothing needs building.
+### GitHub Pages
+
+The app is published at **https://neon-ninja.github.io/LINZ_browser/** by
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml), which runs the
+tests and deploys `index.html`, `css/` and `js/` on every push to the default
+branch. One-time setup: in the repository's **Settings → Pages**, set
+**Source** to **GitHub Actions**, then re-run the workflow (Actions → Deploy to
+GitHub Pages → Run workflow).
 
 ## How it works
 
