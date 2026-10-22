@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  bboxCondition, buildCondition, buildFilter, fieldKind, operatorArity, operatorsFor, quoteIdent, quoteString,
+  addressSearchFilter, asciiFold, bboxCondition, buildCondition, buildFilter, fieldKind, operatorArity, operatorsFor,
+  pointCondition, quoteIdent, quoteString,
 } from '../js/cql.js';
 
 test('fieldKind maps LDS field types', () => {
@@ -117,4 +118,30 @@ test('map extent becomes a WGS84 BBOX', () => {
     "((a = 'x') OR (a = 'y')) AND BBOX(shape,174.761235,-36.9,174.8,-36.8,'EPSG:4326')",
   );
   assert.equal(buildFilter({ bbox: box }).cql, "BBOX(shape,174.761235,-36.9,174.8,-36.8,'EPSG:4326')");
+});
+
+test('pointCondition uses an SRID-tagged WGS84 point', () => {
+  assert.equal(pointCondition('shape', { lon: 174.76642, lat: -36.84339 }),
+    'INTERSECTS(shape, SRID=4326;POINT(174.76642 -36.84339))');
+  assert.equal(pointCondition('shape', { lon: 174.7664212345, lat: -36.84339, radius: 50 }),
+    'DWITHIN(shape, SRID=4326;POINT(174.766421 -36.84339), 50, meters)');
+  assert.equal(
+    buildFilter({ conditions: [{ field: 'a', type: 'string', op: 'eq', value: 'x' }], near: { field: 'shape', lon: 1, lat: 2 } }).cql,
+    "(a = 'x') AND INTERSECTS(shape, SRID=4326;POINT(1 2))",
+  );
+});
+
+test('asciiFold strips macrons', () => {
+  assert.equal(asciiFold('Taupō, Ōtaki, Whanganui-a-Tara'), 'Taupo, Otaki, Whanganui-a-Tara');
+});
+
+test('addressSearchFilter', () => {
+  const f = 'full_address_ascii';
+  assert.equal(addressSearchFilter('12 Queen St, Auckland'),
+    `(${f} ILIKE '12 %' OR ${f} ILIKE '%/12 %') AND ${f} ILIKE '%queen%' AND ${f} ILIKE '%st%' AND ${f} ILIKE '%auckland%'`);
+  assert.equal(addressSearchFilter('Lake Tce Taupō'),
+    `${f} ILIKE '%lake%' AND (${f} ILIKE '%tce%' OR ${f} ILIKE '%terrace%') AND ${f} ILIKE '%taupo%'`);
+  assert.equal(addressSearchFilter('2/12a'), `(${f} ILIKE '2/12a %' OR ${f} ILIKE '%/2/12a %')`);
+  assert.equal(addressSearchFilter("O'Neill"), `${f} ILIKE '%o''neill%'`);
+  assert.equal(addressSearchFilter(' , a '), '');
 });

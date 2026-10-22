@@ -8,7 +8,10 @@
 // than LINZ's `services;key=…/wfs` URL form, which keeps it out of request
 // URLs and avoids proxies that reject `;` in paths.
 
-import { fieldKind, quoteIdent, quoteString } from './cql.js';
+import {
+  addressSearchFilter, asciiFold, bboxCondition, fieldKind, quoteIdent, quoteString,
+} from './cql.js';
+import { geometryBounds, pointInPolygon, pointOnSurface } from './geo.js';
 
 export const LDS_ORIGIN = 'https://data.linz.govt.nz';
 const API = `${LDS_ORIGIN}/services/api/v1.x`;
@@ -37,7 +40,7 @@ export function parseServiceError(text) {
   const raw = exception ? exception[1]
     : (/<title>([\s\S]*?)<\/title>/i.exec(body) || [])[1]
     || (/"detail"\s*:\s*"([^"]+)"/.exec(body) || [])[1]
-    || '';
+    || (body.length < 200 && !/[<{]/.test(body) ? body : '');
   return raw
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/&apos;|&#39;/g, "'").replace(/&amp;/g, '&')
@@ -133,21 +136,6 @@ export function getCategories() {
       throw err;
     });
   return categoriesPromise;
-}
-
-/** [[south, west], [north, east]] of a GeoJSON geometry's coordinates, or null. */
-export function geometryBounds(geometry) {
-  let west = Infinity; let south = Infinity; let east = -Infinity; let north = -Infinity;
-  const visit = (coords) => {
-    if (typeof coords?.[0] === 'number') {
-      west = Math.min(west, coords[0]); east = Math.max(east, coords[0]);
-      south = Math.min(south, coords[1]); north = Math.max(north, coords[1]);
-    } else if (Array.isArray(coords)) {
-      coords.forEach(visit);
-    }
-  };
-  visit(geometry?.coordinates);
-  return Number.isFinite(west) ? [[south, west], [north, east]] : null;
 }
 
 /** Normalises a catalogue layer/table record into what the UI needs. */
@@ -422,4 +410,136 @@ export async function testApiKey(apiKey) {
   } catch (err) {
     return { ok: false, message: `Could not reach LINZ (${err.message}).` };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Geocoding and reverse geocoding with LINZ's own address, parcel and title layers.
+
+export const ADDRESS_LAYER = { type: 'layer', id: 123113, geometryField: 'shape' }; // NZ Addresses
+export const PARCEL_LAYER = { type: 'layer', id: 50772 }; // NZ Primary Parcels
+export const TITLE_LAYER = { type: 'layer', id: 50804 }; // NZ Property Titles
+
+/** URL for the vector Query API, which finds features of some layers near a point. */
+export function queryApiUrl({ layers, lon, lat, radius = 100, maxResults = 5 }) {
+  const params = new URLSearchParams();
+  for (const id of layers) params.append('layer', String(id));
+  params.set('x', String(lon));
+  params.set('y', String(lat));
+  params.set('radius', String(radius));
+  params.set('max_results', String(maxResults));
+  params.set('geometry', 'true');
+  params.set('with_field_names', 'true');
+  return `${LDS_ORIGIN}/services/query/v1/vector.json?${params}`;
+}
+
+/** Features of each layer near a point, nearest first, with `distance` in metres. */
+async function queryNear(apiKey, options, { signal } = {}) {
+  const res = await fetchJson(queryApiUrl(options), { signal, apiKey });
+  const layers = (await res.json()).vectorQuery?.layers || {};
+  const byLayer = {};
+  for (const id of options.layers) {
+    byLayer[id] = [...(layers[id]?.features || [])].sort((a, b) => a.distance - b.distance);
+  }
+  return byLayer;
+}
+
+// Polygons the point is inside, or failing that the nearest one.
+function containingOrNearest(features) {
+  const containing = features.filter((f) => f.distance === 0);
+  return containing.length ? containing : features.slice(0, 1);
+}
+
+/**
+ * Reverse geocodes a point: the nearest addresses (within 100 m) and the
+ * parcel and title at the point.
+ * @returns {Promise<{addresses: object[], parcels: object[], titles: object[]}>} GeoJSON
+ *   features with `distance` in metres.
+ */
+export async function whatsHere(apiKey, { lon, lat }, { signal } = {}) {
+  const layers = [ADDRESS_LAYER.id, PARCEL_LAYER.id, TITLE_LAYER.id];
+  const near = await queryNear(apiKey, { layers, lon, lat, radius: 100, maxResults: 5 }, { signal });
+  return {
+    addresses: near[ADDRESS_LAYER.id].slice(0, 3),
+    parcels: containingOrNearest(near[PARCEL_LAYER.id]),
+    titles: containingOrNearest(near[TITLE_LAYER.id]),
+  };
+}
+
+/**
+ * Orders address matches: those starting with the query first, then those
+ * containing it from a word or unit boundary ("3/12 …" for "12 …"), then any
+ * other match; shorter addresses first within each group.
+ */
+export function rankAddresses(addresses, query) {
+  const norm = (t) => asciiFold(t).toLowerCase().replace(/,/g, '').replace(/\s+/g, ' ').trim();
+  const q = norm(query);
+  const atBoundary = new RegExp(`[\\s/]${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+  const score = (a) => {
+    const text = norm(a);
+    if (text.startsWith(q)) return 0;
+    if (atBoundary.test(text)) return 1;
+    return text.includes(q) ? 2 : 3;
+  };
+  return [...addresses].sort((a, b) => score(a) - score(b) || a.length - b.length
+    || a.localeCompare(b, 'en-NZ', { numeric: true }));
+}
+
+/**
+ * Geocodes free text against NZ Addresses.
+ * @returns {Promise<{address: string, lon: number, lat: number}[]>}
+ */
+export async function geocodeAddress(apiKey, text, { limit = 8, signal } = {}) {
+  const cql = addressSearchFilter(text);
+  if (!cql) return [];
+  const { collection } = await getFeatures(apiKey, {
+    typeName: typeName(ADDRESS_LAYER),
+    cql,
+    properties: ['full_address', ADDRESS_LAYER.geometryField],
+    count: 50,
+    geographic: true,
+  }, { signal });
+  const byAddress = new Map();
+  for (const f of collection.features || []) {
+    const address = f.properties?.full_address;
+    if (address && f.geometry && !byAddress.has(address)) byAddress.set(address, f.geometry.coordinates);
+  }
+  return rankAddresses([...byAddress.keys()], text).slice(0, limit).map((address) => {
+    const [lon, lat] = byAddress.get(address);
+    return { address, lon, lat };
+  });
+}
+
+/**
+ * Addresses for a feature (a parcel, title, building, …): those inside it for
+ * polygons, otherwise the nearest address within 100 m of it.
+ * @returns {Promise<{addresses: string[], inside: boolean, distance: number|null}>}
+ */
+export async function addressesForFeature(apiKey, feature, { signal } = {}) {
+  const geometry = feature?.geometry;
+  if (!geometry) return { addresses: [], inside: false, distance: null };
+
+  if (/Polygon$/.test(geometry.type)) {
+    const [[south, west], [north, east]] = geometryBounds(geometry);
+    const { collection } = await getFeatures(apiKey, {
+      typeName: typeName(ADDRESS_LAYER),
+      cql: bboxCondition(ADDRESS_LAYER.geometryField, { west, south, east, north }),
+      properties: ['full_address', ADDRESS_LAYER.geometryField],
+      count: 1000,
+      geographic: true,
+    }, { signal });
+    const inside = new Set((collection.features || [])
+      .filter((a) => a.geometry && pointInPolygon(a.geometry.coordinates, geometry))
+      .map((a) => a.properties.full_address));
+    if (inside.size) {
+      const addresses = [...inside].sort((a, b) => a.localeCompare(b, 'en-NZ', { numeric: true }));
+      return { addresses, inside: true, distance: 0 };
+    }
+  }
+
+  const [lon, lat] = pointOnSurface(geometry);
+  const near = await queryNear(apiKey, { layers: [ADDRESS_LAYER.id], lon, lat, radius: 100, maxResults: 1 }, { signal });
+  const nearest = near[ADDRESS_LAYER.id][0];
+  return nearest
+    ? { addresses: [nearest.properties.full_address], inside: false, distance: nearest.distance }
+    : { addresses: [], inside: false, distance: null };
 }

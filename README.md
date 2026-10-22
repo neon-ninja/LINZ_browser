@@ -32,7 +32,21 @@ talks to the LINZ APIs directly from your browser.
   [ECQL](https://docs.geoserver.org/stable/en/user/filter/ecql_reference.html)
   filter is shown as you build it; tick *Edit by hand* to write any filter
   yourself (spatial predicates, functions, …).
-- **Map extent filter**: limit results to the area visible on the map.
+- **Location filter**: limit results to the area visible on the map, to
+  features at the marked location (e.g. the title or parcel under an address),
+  or to features within a chosen number of metres of it.
+- **Find an address (geocoding).** The search box on the map looks up NZ
+  Addresses as you type ("12 queen st auckland", "2/12a …", "lake tce taupo";
+  macrons optional), then zooms to the address and marks it.
+- **What's here? (reverse geocoding).** Right-click the map (long-press on a
+  touch screen), or switch on *What's here?* and click, to see the nearest
+  addresses, the parcel and the title at that spot. *Open* loads that parcel
+  or title as a filtered query, *Copy* copies a title number (e.g. to filter a
+  title table), and *Filter … to here* restricts the open dataset to the spot.
+- **Addresses for features.** *Find address* in a feature's popup, or *Find
+  addresses* for the whole page, adds the address of each parcel, title,
+  building, etc. (every address inside a polygon, otherwise the nearest within
+  100 m) as an extra column, included in CSV and GeoJSON downloads.
 - Choose columns, sort order (or click a column header) and page size; page
   through results with total match counts.
 - Results on an OpenStreetMap basemap: click a row to zoom to the feature, or
@@ -78,6 +92,10 @@ GitHub Pages → Run workflow).
 | Query features | WFS 2.0 `GetFeature` with `cql_filter`, `propertyName`, `sortBy`, `count`, `startIndex`, `outputFormat=application/json`, `srsName=EPSG:4326` |
 | Total matches | WFS `GetFeature` with `resultType=hits` |
 | Check a key | WFS `GetCapabilities` (401 for an unknown key) |
+| Find an address | WFS `GetFeature` on NZ Addresses (layer 123113) with `ILIKE` filters on `full_address_ascii` |
+| What's here? | Vector Query API: `GET /services/query/v1/vector.json?layer=123113&layer=50772&layer=50804&x=…&y=…&radius=100` (NZ Addresses, NZ Primary Parcels, NZ Property Titles) |
+| Address for a polygon | WFS `GetFeature` on NZ Addresses with a `BBOX` filter, then a point-in-polygon test in the browser; the Query API for the nearest address otherwise |
+| At / near the marked location | `cql_filter` with `INTERSECTS(shape, SRID=4326;POINT(lon lat))` or `DWITHIN(…, metres, meters)` |
 
 Both APIs allow cross-origin requests, so no proxy server is needed. The browser
 sends the key in an `Authorization: key …` header rather than LINZ's
@@ -90,6 +108,9 @@ their details needs a key with the `layers:read` scope. Without that scope the
 app reads their fields from WFS `DescribeFeatureType` instead, so they can still
 be queried; only the description, extent and feature count are missing.
 
+The `SRID=4326;` prefix on points matters: without it LINZ reads the point in
+the layer's own coordinate system, which for NZGD2000 layers swaps the axes.
+
 WFS has no "distinct values" request, so value suggestions are built by fetching
 a field in small batches, each excluding the values already found, until a
 batch comes back short (the list is then complete) or there are plenty of
@@ -101,10 +122,13 @@ suggestions.
 index.html        page structure
 css/styles.css    styles (light and dark themes)
 js/app.js         UI: search, favourites, query builder, results, map
-js/linz.js        LINZ catalogue and WFS client
+js/lookup.js      map address search, What's here?, the marked location
+js/linz.js        LINZ catalogue, WFS and Query API client (incl. geocoding)
 js/cql.js         turns query-builder conditions into ECQL
+js/geo.js         geometry helpers (bounds, point in polygon, point on surface)
+js/dom.js         tiny DOM helpers
 js/storage.js     localStorage helpers (key, favourites, last queries)
-tests/            unit tests for cql.js and linz.js
+tests/            unit tests for cql.js, geo.js and linz.js
 ```
 
 [Leaflet](https://leafletjs.com) (from cdnjs) draws the map.

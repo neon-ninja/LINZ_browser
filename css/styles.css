@@ -251,7 +251,14 @@ main { padding: 16px; min-width: 0; }
 
 /* Main */
 
-.welcome { max-width: 680px; padding: 24px 8px; }
+.welcome { max-width: 900px; padding: 24px 8px; }
+.welcome > p, .welcome > ol { max-width: 680px; }
+.lookup-intro { margin-top: 24px; }
+.lookup-intro h2 { font-size: 19px; margin-bottom: 4px; }
+.lookup-intro p { margin: 0 0 4px; }
+#welcome-map-slot .map { height: 460px; }
+#lookup-card > summary { cursor: pointer; font-weight: 600; }
+#lookup-card p { margin: 8px 0 0; }
 .welcome h1 { font-size: 26px; margin-bottom: 8px; }
 .welcome li { margin: 6px 0; }
 
@@ -321,6 +328,10 @@ details.card[open] > summary { margin-bottom: 8px; }
 
 .check-row { display: flex; align-items: center; gap: 6px; margin: 10px 0; font-size: 14px; }
 
+.location-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 12px 0 4px; font-size: 14px; }
+.location-row #radius { width: 80px; }
+.location-row #radius-wrap { display: inline-flex; align-items: center; gap: 6px; }
+
 .query-options {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
   padding-top: 10px; border-top: 1px solid var(--border);
@@ -370,6 +381,36 @@ details.card[open] > summary { margin-bottom: 8px; }
   background: var(--surface-2);
 }
 .leaflet-container { font: inherit; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--text); }
+.leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+.leaflet-container.lookup-active, .lookup-active .leaflet-interactive { cursor: crosshair; }
+
+.leaflet-bar a.lookup-here { width: auto; padding: 0 9px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.leaflet-bar a.lookup-here.active { background: var(--accent); color: var(--on-accent); }
+
+.lookup-search { position: relative; width: min(300px, calc(100vw - 140px)); }
+.lookup-search .lookup-input {
+  width: 100%; border: 2px solid rgb(0 0 0 / 20%); border-radius: 6px; padding: 6px 9px;
+  background: var(--surface); box-shadow: var(--shadow);
+}
+.lookup-results {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; margin: 0; padding: 4px 0; list-style: none;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: var(--shadow); max-height: 280px; overflow-y: auto; font-size: 13px;
+}
+.lookup-results li { padding: 5px 10px; cursor: pointer; }
+.lookup-results li:hover, .lookup-results li[aria-selected="true"] { background: var(--accent-soft); }
+.lookup-results li.lookup-message { cursor: default; color: var(--muted); background: none; }
+
+.here { font-size: 13px; }
+.here-coords { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.here h4 { margin: 10px 0 2px; font-size: 13px; }
+.here ul { margin: 0; padding-left: 18px; }
+.here p { margin: 2px 0; }
+.here-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.popup-address { font-weight: 600; margin: 8px 0 0; }
+.popup-address:empty { display: none; }
+.error-text { color: var(--danger); }
 .leaflet-popup-content { font-size: 13px; max-height: 260px; overflow-y: auto; }
 .leaflet-popup-content table { border-collapse: collapse; }
 .leaflet-popup-content th { text-align: left; padding-right: 8px; font-family: var(--mono); font-weight: 500; vertical-align: top; }
@@ -393,6 +434,8 @@ details.card[open] > summary { margin-bottom: 8px; }
 .results-table tbody tr { cursor: pointer; }
 .results-table tbody tr:hover { background: var(--surface-2); }
 .results-table tbody tr.selected { background: var(--accent-soft); }
+.results-table th.lookup-col { font-style: italic; }
+.results-table td.lookup-col { background: var(--surface-2); }
 
 /* Dialog */
 

@@ -1,27 +1,12 @@
 import { buildFilter, operatorArity, operatorsFor } from './cql.js';
+import { $, el } from './dom.js';
+import { pointOnSurface } from './geo.js';
 import {
-  API_KEY_HELP_URL, LDS_ORIGIN, countFeatures, getCategories, getDataset, getFeatures,
-  sampleValues, searchDatasets, standaloneWfsUrl, testApiKey, typeName,
+  ADDRESS_LAYER, API_KEY_HELP_URL, LDS_ORIGIN, addressesForFeature, countFeatures, getCategories, getDataset,
+  getFeatures, sampleValues, searchDatasets, standaloneWfsUrl, testApiKey, typeName,
 } from './linz.js';
+import { createLookup } from './lookup.js';
 import { load, loadQuery, save, saveQuery } from './storage.js';
-
-const $ = (id) => document.getElementById(id);
-
-/** Small DOM builder: el('a', { href, class: 'x', onclick }, 'text', child). */
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (value === undefined || value === null || value === false) continue;
-    if (key === 'class') node.className = value;
-    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
-    else if (key === 'value') node.value = value;
-    else node.setAttribute(key, value === true ? '' : value);
-  }
-  for (const child of children.flat()) {
-    if (child !== null && child !== undefined && child !== false) node.append(child);
-  }
-  return node;
-}
 
 const numberFormat = new Intl.NumberFormat('en-NZ');
 const dateFormat = new Intl.DateTimeFormat('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -44,11 +29,15 @@ const state = {
   query: null,
   results: null,
   showHints: false,
+  // Location marked on the map by address search or "What's here?".
+  marker: load('marker', null),
 };
 
 let searchController = null;
 let queryController = null;
 let datasetToken = 0;
+// A query to apply when a dataset opens (e.g. "Open" in a What's here? popup).
+let pendingQuery = null;
 
 // ---------------------------------------------------------------------------
 // API key
@@ -333,21 +322,36 @@ function fieldByName(name) {
 
 function emptyQuery() {
   return {
-    match: 'all', conditions: [], useBbox: false, columns: null,
+    match: 'all', conditions: [], location: 'any', radius: 50, columns: null,
     sortField: '', sortDir: 'ASC', limit: 100, manualCql: null,
   };
 }
 
-/** Restores the last query used on a dataset, dropping anything that no longer fits its fields. */
-function restoreQuery(dataset) {
-  const saved = loadQuery(datasetKey(dataset));
+/** Fills in defaults and drops anything in a saved query that no longer fits the dataset. */
+function sanitiseQuery(dataset, saved) {
   const query = { ...emptyQuery(), ...(saved || {}) };
+  if (query.useBbox) query.location = 'view'; // saved before the location filter existed
+  delete query.useBbox;
   const names = new Set(dataset.fields.filter((f) => f.kind !== 'geometry').map((f) => f.name));
   query.conditions = (query.conditions || []).filter((c) => names.has(c.field));
   if (query.columns) query.columns = query.columns.filter((n) => names.has(n));
   if (!names.has(query.sortField)) query.sortField = '';
-  if (!dataset.geometryField) query.useBbox = false;
+  if (!dataset.geometryField || (['point', 'near'].includes(query.location) && !state.marker)) query.location = 'any';
   return query;
+}
+
+/** Opens a dataset with the given conditions instead of its last query. */
+function openWithConditions(type, id, conditions) {
+  const query = { ...emptyQuery(), conditions: conditions.map((c) => ({ op: 'eq', value2: '', ...c })) };
+  if (state.dataset && state.dataset.type === type && state.dataset.id === id) {
+    state.query = sanitiseQuery(state.dataset, query);
+    state.showHints = false;
+    renderQueryBuilder();
+    runQuery();
+    return;
+  }
+  pendingQuery = { key: `${type}-${id}`, query };
+  location.hash = `#/${type}/${id}`;
 }
 
 async function openDataset(type, id) {
@@ -365,7 +369,9 @@ async function openDataset(type, id) {
       throw new Error(`“${dataset.title}” is a ${KIND_LABELS[dataset.kind]?.toLowerCase() || dataset.kind}. Only vector layers and tables can be queried here.`);
     }
     state.dataset = dataset;
-    state.query = restoreQuery(dataset);
+    const pending = pendingQuery?.key === datasetKey(dataset) ? pendingQuery.query : null;
+    pendingQuery = null;
+    state.query = sanitiseQuery(dataset, pending || loadQuery(datasetKey(dataset)));
     state.results = null;
     state.showHints = false;
     renderDataset();
@@ -392,6 +398,10 @@ function showWelcome() {
   document.title = 'LINZ Data Browser';
   $('welcome').hidden = false;
   $('dataset-view').hidden = true;
+  resultsLayer?.remove();
+  resultsLayer = null;
+  map?.closePopup();
+  placeMap('welcome-map-slot');
   renderSearchResults();
   renderFavourites();
 }
@@ -438,16 +448,14 @@ function renderDataset() {
   renderQueryBuilder();
   resetResults();
 
+  // Layers show results on the map; tables keep it in a collapsible lookup panel.
   const hasGeometry = Boolean(d.geometryField);
-  $('map').hidden = !hasGeometry || !window.L;
+  $('lookup-card').hidden = hasGeometry || !map;
+  $('find-addresses').hidden = !hasGeometry || (d.type === ADDRESS_LAYER.type && d.id === ADDRESS_LAYER.id);
   $('dataset-body').hidden = false;
-  if (hasGeometry) {
-    const map = ensureMap();
-    if (map) {
-      map.invalidateSize();
-      if (d.extent) map.fitBounds(d.extent, { padding: [10, 10], animate: false });
-    }
-  }
+  map?.closePopup(); // its actions may refer to the previous dataset
+  placeMap(hasGeometry ? 'results-map-slot' : 'lookup-map-slot');
+  if (hasGeometry && map && d.extent) map.fitBounds(d.extent, { padding: [10, 10], animate: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -475,8 +483,10 @@ function renderQueryBuilder() {
   const q = state.query;
   const fields = queryableFields();
   $('match').value = q.match;
-  $('use-bbox').checked = q.useBbox;
-  $('bbox-row').hidden = !state.dataset.geometryField || !window.L;
+  $('location-row').hidden = !state.dataset.geometryField || !map;
+  $('location').value = q.location;
+  $('radius').value = String(q.radius);
+  renderLocationOptions();
 
   $('sort-field').replaceChildren(
     el('option', { value: '' }, '(default)'),
@@ -632,18 +642,43 @@ function setAllColumns(on) {
   onColumnsChange();
 }
 
-function currentBbox() {
+function renderLocationOptions() {
+  const q = state.query;
+  const marker = state.marker;
+  for (const value of ['point', 'near']) {
+    $('location').querySelector(`option[value="${value}"]`).disabled = !marker;
+  }
+  if (!marker && ['point', 'near'].includes(q.location)) {
+    q.location = 'any';
+    $('location').value = 'any';
+  }
+  $('radius-wrap').hidden = q.location !== 'near';
+  $('marker-label').textContent = marker
+    ? `Marked: ${marker.label}`
+    : 'Mark a location by searching for an address on the map, or with What’s here?';
+}
+
+/** The map extent and marked-location restrictions for the current query. */
+function currentSpatial() {
   const d = state.dataset;
-  if (!state.query.useBbox || !d.geometryField || !map) return null;
-  const b = map.getBounds();
-  return { field: d.geometryField, west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
+  const q = state.query;
+  if (!d.geometryField || !map) return {};
+  if (q.location === 'view') {
+    const b = map.getBounds();
+    return { bbox: { field: d.geometryField, west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() } };
+  }
+  if (['point', 'near'].includes(q.location) && state.marker) {
+    const radius = q.location === 'near' ? Math.max(Number(q.radius) || 0, 0) : 0;
+    return { near: { field: d.geometryField, lon: state.marker.lon, lat: state.marker.lat, radius } };
+  }
+  return {};
 }
 
 function currentFilter() {
   const q = state.query;
   if (q.manualCql !== null) return { cql: q.manualCql.trim(), errors: new Map() };
   const conditions = q.conditions.map((c) => ({ ...c, type: fieldByName(c.field)?.type }));
-  return buildFilter({ match: q.match, conditions, bbox: currentBbox() });
+  return buildFilter({ match: q.match, conditions, ...currentSpatial() });
 }
 
 function updateCql() {
@@ -669,7 +704,15 @@ function setManualCql(on) {
 
 function initQueryBuilder() {
   $('match').addEventListener('change', (e) => { state.query.match = e.target.value; updateCql(); });
-  $('use-bbox').addEventListener('change', (e) => { state.query.useBbox = e.target.checked; updateCql(); });
+  $('location').addEventListener('change', (e) => {
+    state.query.location = e.target.value;
+    renderLocationOptions();
+    updateCql();
+  });
+  $('radius').addEventListener('input', (e) => {
+    state.query.radius = Number(e.target.value) || 0;
+    updateCql();
+  });
   $('sort-field').addEventListener('change', (e) => { state.query.sortField = e.target.value; });
   $('sort-dir').addEventListener('change', (e) => { state.query.sortDir = e.target.value; });
   $('limit').addEventListener('change', (e) => { state.query.limit = Number(e.target.value); });
@@ -729,7 +772,7 @@ async function runQuery() {
     count: q.limit,
     startIndex: 0,
     geographic: Boolean(d.geometryField),
-  }, columns || queryableFields().map((f) => f.name), { fitMap: !q.useBbox });
+  }, columns || queryableFields().map((f) => f.name), { fitMap: q.location !== 'view' });
 }
 
 async function fetchPage(query, columns, { fitMap = true } = {}) {
@@ -791,7 +834,7 @@ function setResultsStatus(text) {
 }
 
 function setResultButtons(enabled) {
-  for (const id of ['download-csv', 'download-geojson', 'copy-url']) $(id).disabled = !enabled;
+  for (const id of ['download-csv', 'download-geojson', 'copy-url', 'find-addresses']) $(id).disabled = !enabled;
   if (!enabled) {
     $('page-prev').disabled = true;
     $('page-next').disabled = true;
@@ -862,7 +905,7 @@ function renderResults({ fitMap }) {
   renderMapResults({ fitMap });
 }
 
-function selectFeature(index, { fromMap = false } = {}) {
+function selectFeature(index, { fromMap = false, latlng = null } = {}) {
   const r = state.results;
   if (!r) return;
   for (const row of $('results-table').querySelectorAll('tr.selected')) row.classList.remove('selected');
@@ -870,6 +913,94 @@ function selectFeature(index, { fromMap = false } = {}) {
   row?.classList.add('selected');
   if (fromMap) row?.scrollIntoView({ block: 'nearest' });
   highlightFeature(index, { zoom: !fromMap });
+  openFeaturePopup(index, latlng);
+}
+
+// ---------------------------------------------------------------------------
+// Addresses for result features (reverse geocoding parcels, titles, buildings…)
+
+const ADDRESS_COLUMN = 'address_lookup';
+
+/** Display text for an addressesForFeature() result (undefined while pending). */
+function addressText(entry) {
+  if (entry === undefined) return '…';
+  if (entry.error) return `Lookup failed: ${entry.error}`;
+  const [first] = entry.addresses;
+  if (!first) return 'No address within 100 m';
+  if (entry.inside) return entry.addresses.length > 1 ? `${first} (+${entry.addresses.length - 1} more)` : first;
+  return `${first} (${Math.round(entry.distance)} m away)`;
+}
+
+/** Full text for downloads: every address inside a polygon, or the nearest one. */
+function addressExport(entry) {
+  if (!entry || entry.error || !entry.addresses.length) return '';
+  return entry.inside ? entry.addresses.join('; ') : `${entry.addresses[0]} (${Math.round(entry.distance)} m away)`;
+}
+
+function ensureAddressColumn() {
+  const table = $('results-table');
+  if (table.querySelector(`th[data-col="${ADDRESS_COLUMN}"]`)) return;
+  table.querySelector('thead tr').append(el('th', { scope: 'col', 'data-col': ADDRESS_COLUMN, class: 'lookup-col' }, 'address (looked up)'));
+  for (const row of table.querySelectorAll('tbody tr')) {
+    row.append(el('td', { class: 'lookup-col', 'data-address': row.dataset.index }));
+  }
+}
+
+function renderAddressCell(index) {
+  const entry = state.results.addresses[index];
+  const cell = $('results-table').querySelector(`td[data-address="${index}"]`);
+  if (cell) {
+    cell.textContent = addressText(entry);
+    cell.title = entry?.addresses?.join('\n') || '';
+  }
+  const popupText = document.querySelector(`.feature-popup[data-index="${index}"] .popup-address`);
+  if (popupText) popupText.textContent = addressText(entry);
+}
+
+/** Looks up (once) the address for one result feature. */
+async function findAddressFor(index, signal) {
+  const r = state.results;
+  r.addresses ??= [];
+  if (r.addresses[index] !== undefined) return;
+  ensureAddressColumn();
+  renderAddressCell(index);
+  try {
+    r.addresses[index] = await addressesForFeature(state.apiKey, r.features[index], { signal });
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    r.addresses[index] = { error: err.message };
+  }
+  if (state.results === r) renderAddressCell(index);
+}
+
+/** Runs `task` over `items` with at most `limit` running at once. */
+async function runLimited(items, limit, task) {
+  const queue = [...items];
+  const worker = async () => {
+    while (queue.length) await task(queue.shift());
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, queue.length) }, worker));
+}
+
+async function findAllAddresses() {
+  const r = state.results;
+  if (!r || !state.apiKey) return;
+  const { signal } = queryController;
+  const button = $('find-addresses');
+  const todo = r.features.map((f, i) => i).filter((i) => r.features[i].geometry && r.addresses?.[i] === undefined);
+  let done = 0;
+  button.disabled = true;
+  button.textContent = `Finding addresses… 0/${todo.length}`;
+  await runLimited(todo, 4, async (i) => {
+    if (signal.aborted) return;
+    await findAddressFor(i, signal);
+    done += 1;
+    if (state.results === r) button.textContent = `Finding addresses… ${done}/${todo.length}`;
+  });
+  if (state.results === r) {
+    button.textContent = 'Find addresses';
+    button.disabled = false;
+  }
 }
 
 function download(filename, type, content) {
@@ -894,19 +1025,27 @@ function resultFilename(ext) {
 }
 
 function initResults() {
+  $('find-addresses').addEventListener('click', findAllAddresses);
   $('page-prev').addEventListener('click', () => changePage(-1));
   $('page-next').addEventListener('click', () => changePage(1));
   $('download-csv').addEventListener('click', () => {
     const r = state.results;
-    const lines = [r.columns.map(csvCell).join(',')];
-    for (const f of r.features) lines.push(r.columns.map((c) => csvCell(f.properties?.[c])).join(','));
+    const extra = r.addresses ? [ADDRESS_COLUMN] : [];
+    const lines = [[...r.columns, ...extra].map(csvCell).join(',')];
+    r.features.forEach((f, i) => {
+      const values = r.columns.map((c) => f.properties?.[c]);
+      if (r.addresses) values.push(addressExport(r.addresses[i]));
+      lines.push(values.map(csvCell).join(','));
+    });
     // Leading BOM so spreadsheet apps read the file as UTF-8 (macrons in names).
     download(resultFilename('csv'), 'text/csv', `\ufeff${lines.join('\r\n')}\r\n`);
   });
   $('download-geojson').addEventListener('click', () => {
     const r = state.results;
-    download(resultFilename('geojson'), 'application/geo+json',
-      JSON.stringify({ type: 'FeatureCollection', features: r.features }));
+    const features = r.addresses
+      ? r.features.map((f, i) => ({ ...f, properties: { ...f.properties, [ADDRESS_COLUMN]: addressExport(r.addresses[i]) } }))
+      : r.features;
+    download(resultFilename('geojson'), 'application/geo+json', JSON.stringify({ type: 'FeatureCollection', features }));
   });
   $('copy-url').addEventListener('click', async () => {
     const button = $('copy-url');
@@ -924,6 +1063,7 @@ function initResults() {
 // Map
 
 let map = null;
+let lookup = null;
 let resultsLayer = null;
 let featureLayers = [];
 let highlighted = null;
@@ -931,23 +1071,89 @@ let highlighted = null;
 const STYLE = { color: '#0f6e6e', weight: 2, opacity: 0.9, fillColor: '#1aa39c', fillOpacity: 0.2 };
 const HIGHLIGHT = { color: '#e8590c', weight: 3, opacity: 1, fillColor: '#ff922b', fillOpacity: 0.4 };
 
-function ensureMap() {
-  if (map || !window.L) return map;
+function initMap() {
+  if (!window.L) {
+    $('map').hidden = true;
+    return;
+  }
   map = L.map('map').setView([-41.0, 173.5], 5);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · Data &copy; <a href="https://data.linz.govt.nz">LINZ</a>',
   }).addTo(map);
   map.on('moveend', () => {
-    if (state.dataset && state.query?.useBbox) updateCql();
+    if (state.dataset && state.query?.location === 'view') updateCql();
   });
-  return map;
+  lookup = createLookup(map, {
+    getApiKey: () => state.apiKey,
+    onMark: (marker) => {
+      state.marker = marker;
+      save('marker', marker);
+      if (state.dataset && state.query) {
+        renderLocationOptions();
+        updateCql();
+      }
+    },
+    onOpen: (type, id, condition) => openWithConditions(type, id, [condition]),
+    filterHere: () => {
+      const d = state.dataset;
+      if (!d?.geometryField || !state.query || state.query.manualCql !== null) return null;
+      return {
+        label: `Filter ${d.title} to here`,
+        run: () => {
+          // Points rarely sit exactly on the marked spot, so look nearby instead.
+          state.query.location = /point/i.test(d.geometryType || '') ? 'near' : 'point';
+          renderQueryBuilder();
+          map.closePopup();
+          runQuery();
+        },
+      };
+    },
+  }, state.marker);
 }
 
-function popupContent(feature) {
+/** Moves the map into a placeholder: the welcome page, the results card or the table lookup panel. */
+function placeMap(slotId) {
+  const slot = $(slotId);
+  if (!map || $('map').parentElement === slot) return;
+  slot.append($('map'));
+  map.invalidateSize();
+}
+
+function popupContent(feature, index) {
+  const r = state.results;
   const rows = Object.entries(feature.properties || {}).map(([k, v]) =>
     el('tr', {}, el('th', {}, k), el('td', {}, formatCell(v).text)));
-  return el('table', {}, rows);
+  const findButton = el('button', {
+    type: 'button',
+    class: 'button small',
+    onclick: async () => {
+      findButton.disabled = true;
+      await findAddressFor(index, queryController?.signal);
+      findButton.remove();
+    },
+  }, 'Find address');
+  const showAddress = Boolean(feature.geometry) && !$('find-addresses').hidden;
+  return el('div', { class: 'feature-popup', 'data-index': index },
+    el('table', {}, rows),
+    showAddress && el('p', { class: 'popup-address' }, r.addresses?.[index] !== undefined ? addressText(r.addresses[index]) : ''),
+    el('div', { class: 'here-actions' },
+      showAddress && r.addresses?.[index] === undefined && findButton,
+      feature.geometry && el('button', {
+        type: 'button',
+        class: 'button small',
+        onclick: () => {
+          const [lon, lat] = pointOnSurface(feature.geometry);
+          lookup.lookupAt({ lon, lat });
+        },
+      }, 'What’s here?')));
+}
+
+function openFeaturePopup(index, latlng) {
+  const feature = state.results?.features[index];
+  if (!map || !feature?.geometry) return;
+  const at = latlng || (([lon, lat]) => L.latLng(lat, lon))(pointOnSurface(feature.geometry));
+  L.popup({ maxWidth: 360 }).setLatLng(at).setContent(popupContent(feature, index)).openOn(map);
 }
 
 function renderMapResults({ fitMap }) {
@@ -959,12 +1165,17 @@ function renderMapResults({ fitMap }) {
   resultsLayer = L.featureGroup();
   features.forEach((feature, i) => {
     if (!feature.geometry) return;
+    // Clicks are handled here, not by the map, so What's here? mode can take them over.
     const layer = L.geoJSON(feature, {
       style: () => STYLE,
-      pointToLayer: (_, latlng) => L.circleMarker(latlng, { ...STYLE, radius: 5, fillOpacity: 0.7 }),
+      bubblingMouseEvents: false,
+      pointToLayer: (_, latlng) => L.circleMarker(latlng, { ...STYLE, radius: 5, fillOpacity: 0.7, bubblingMouseEvents: false }),
     });
-    layer.bindPopup(() => popupContent(feature), { maxWidth: 360 });
-    layer.on('click', () => selectFeature(i, { fromMap: true }));
+    layer.on('click', (e) => {
+      if (lookup.active) lookup.lookupAt({ lon: e.latlng.lng, lat: e.latlng.lat });
+      else selectFeature(i, { fromMap: true, latlng: e.latlng });
+    });
+    layer.on('contextmenu', (e) => lookup.lookupAt({ lon: e.latlng.lng, lat: e.latlng.lat }));
     featureLayers[i] = layer;
     resultsLayer.addLayer(layer);
   });
@@ -983,7 +1194,6 @@ function highlightFeature(index, { zoom }) {
   if (zoom) {
     const bounds = highlighted.getBounds();
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17 });
-    highlighted.openPopup();
   }
 }
 
@@ -1006,6 +1216,8 @@ function init() {
   initSearch();
   initQueryBuilder();
   initResults();
+  initMap();
+  $('lookup-card').addEventListener('toggle', () => map?.invalidateSize());
   loadCategories();
   $('ds-favourite').addEventListener('click', () => toggleFavourite(state.dataset));
   renderKeyState();

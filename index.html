@@ -73,6 +73,11 @@
           <li><strong>Build a query</strong>, run it, and view the results as a table and on a map.</li>
           <li><strong>Star</strong> the datasets you use often. Your last query on each one is remembered too.</li>
         </ol>
+        <section class="card lookup-intro" aria-labelledby="lookup-heading">
+          <h2 id="lookup-heading">Look up an address</h2>
+          <p>Search for an address with the box on the map. To see the nearest address, the parcel and the title at any spot, right-click it (long-press on a touch screen) or switch on <strong>What's here?</strong> and click.</p>
+          <div id="welcome-map-slot"></div>
+        </section>
       </section>
 
       <div id="dataset-view" hidden>
@@ -123,10 +128,19 @@
               <div id="conditions" class="conditions"></div>
               <button type="button" id="add-condition" class="button small">+ Add condition</button>
 
-              <label id="bbox-row" class="check-row">
-                <input type="checkbox" id="use-bbox">
-                Only features within the current map view
-              </label>
+              <div id="location-row" class="location-row">
+                <label for="location">Location</label>
+                <select id="location">
+                  <option value="any">Anywhere</option>
+                  <option value="view">Within the current map view</option>
+                  <option value="point">At the marked location</option>
+                  <option value="near">Near the marked location</option>
+                </select>
+                <label id="radius-wrap">within
+                  <input type="number" id="radius" min="1" step="1" inputmode="numeric" aria-label="Distance in metres"> m
+                </label>
+                <span id="marker-label" class="muted small"></span>
+              </div>
             </div>
 
             <div class="query-options">
@@ -172,6 +186,12 @@
             </div>
           </section>
 
+          <details class="card" id="lookup-card" hidden>
+            <summary>Look up an address</summary>
+            <p class="muted small">Search for an address on the map, or right-click a spot, to find its parcel and title (for example, a title number to filter this table by).</p>
+            <div id="lookup-map-slot"></div>
+          </details>
+
           <section class="card results" id="results" aria-labelledby="results-heading">
             <div class="results-toolbar">
               <h3 id="results-heading">Results</h3>
@@ -185,10 +205,15 @@
                 <button type="button" id="download-geojson" class="button small" disabled>GeoJSON</button>
                 <button type="button" id="copy-url" class="button small" disabled title="Copies the WFS request URL, including your API key">Copy request URL</button>
               </div>
+              <div class="toolbar-group">
+                <button type="button" id="find-addresses" class="button small" disabled title="Adds the address of each feature on this page (addresses inside polygons, otherwise the nearest within 100 m)">Find addresses</button>
+              </div>
             </div>
             <div id="results-error" class="alert error" role="alert" hidden></div>
             <code id="request-url" class="request-url" hidden></code>
-            <div id="map" class="map" aria-label="Map of results"></div>
+            <div id="results-map-slot">
+              <div id="map" class="map" aria-label="Map"></div>
+            </div>
             <div class="table-wrap">
               <table id="results-table" class="results-table"></table>
             </div>

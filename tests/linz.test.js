@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  datasetFromSchema, featureParams, flattenCategories, geometryBounds, normaliseDataset, parseNumberMatched,
-  parseResourceRange, parseServiceError, standaloneWfsUrl, typeName, wfsUrl, xsdFieldType,
+  datasetFromSchema, featureParams, flattenCategories, normaliseDataset, parseNumberMatched,
+  parseResourceRange, parseServiceError, queryApiUrl, rankAddresses, standaloneWfsUrl, typeName, wfsUrl, xsdFieldType,
 } from '../js/linz.js';
 
 test('parseResourceRange', () => {
@@ -64,13 +64,6 @@ test('featureParams for a hits request ignores paging and columns', () => {
 test('parseNumberMatched', () => {
   assert.equal(parseNumberMatched('<wfs:FeatureCollection numberMatched="338573" numberReturned="0"/>'), 338573);
   assert.equal(parseNumberMatched('<x/>'), null);
-});
-
-test('geometryBounds', () => {
-  assert.deepEqual(geometryBounds({ type: 'Polygon', coordinates: [[[166.6, -47.3], [166.6, -34.1], [184.2, -34.1], [166.6, -47.3]]] }),
-    [[-47.3, 166.6], [-34.1, 184.2]]);
-  assert.deepEqual(geometryBounds({ type: 'Point', coordinates: [174.7, -36.8] }), [[-36.8, 174.7], [-36.8, 174.7]]);
-  assert.equal(geometryBounds(null), null);
 });
 
 test('normaliseDataset and typeName', () => {
@@ -157,4 +150,29 @@ test('datasetFromSchema builds a fields-only dataset', () => {
   assert.equal(table.kind, 'table');
   assert.equal(table.title, 'table-51564');
   assert.equal(table.geometryField, null);
+});
+
+test('queryApiUrl repeats the layer parameter', () => {
+  assert.equal(queryApiUrl({ layers: [123113, 50772], lon: 174.7, lat: -36.8, radius: 100, maxResults: 5 }),
+    'https://data.linz.govt.nz/services/query/v1/vector.json?layer=123113&layer=50772&x=174.7&y=-36.8&radius=100&max_results=5&geometry=true&with_field_names=true');
+});
+
+test('rankAddresses puts prefix matches first, then shorter ones', () => {
+  assert.deepEqual(rankAddresses([
+    '112 Queen Street, Northcote Point, Auckland',
+    '12 Queen Street, Winton',
+    '3/12 Queen Street, Auckland Central, Auckland',
+    '12 Queen Street, North Dunedin, Dunedin',
+  ], '12 queen street'), [
+    '12 Queen Street, Winton',
+    '12 Queen Street, North Dunedin, Dunedin',
+    '3/12 Queen Street, Auckland Central, Auckland',
+    '112 Queen Street, Northcote Point, Auckland',
+  ]);
+  assert.deepEqual(rankAddresses(['1 Lake Terrace, Taupō', '10 Lake Terrace, Taupō'], 'lake terrace taupo'),
+    ['1 Lake Terrace, Taupō', '10 Lake Terrace, Taupō']);
+});
+
+test('parseServiceError keeps short plain-text errors', () => {
+  assert.equal(parseServiceError('invalid-api-key: Provide a valid api key'), 'invalid-api-key: Provide a valid api key');
 });

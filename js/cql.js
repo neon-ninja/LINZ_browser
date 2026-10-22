@@ -168,12 +168,56 @@ export function bboxCondition(geometryField, { west, south, east, north }) {
 }
 
 /**
- * Combines conditions (and an optional map-extent restriction) into a single
- * filter. Incomplete conditions are skipped and reported in `errors` keyed by
- * their position.
+ * Features at a WGS84 point, or within `radius` metres of it. The SRID prefix
+ * makes LINZ read the point as lon/lat whatever the layer's own CRS is.
+ */
+export function pointCondition(geometryField, { lon, lat, radius = 0 }) {
+  const point = `SRID=4326;POINT(${round(lon)} ${round(lat)})`;
+  const f = quoteIdent(geometryField);
+  return radius > 0 ? `DWITHIN(${f}, ${point}, ${Number(radius)}, meters)` : `INTERSECTS(${f}, ${point})`;
+}
+
+/** Removes diacritics (macrons) so text can be matched against LINZ's `*_ascii` fields. */
+export function asciiFold(text) {
+  return String(text ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+// Abbreviations people type for road types, matched as well as the full word.
+const ROAD_ABBREVIATIONS = {
+  rd: 'road', ave: 'avenue', av: 'avenue', pl: 'place', cres: 'crescent', cr: 'crescent', tce: 'terrace',
+  dr: 'drive', hwy: 'highway', ln: 'lane', pde: 'parade', blvd: 'boulevard', cl: 'close', ct: 'court',
+  gr: 'grove', mt: 'mount', sq: 'square', esp: 'esplanade',
+};
+
+/**
+ * Filter for free-text address search against NZ Addresses' `full_address_ascii`:
+ * every word must appear, a leading house number ("12", "2/12", "12a") must
+ * start the address or follow a unit, and road-type abbreviations also match
+ * the full word. Returns '' when there is nothing to search for.
+ */
+export function addressSearchFilter(text, field = 'full_address_ascii') {
+  const f = quoteIdent(field);
+  const like = (pattern) => `${f} ILIKE ${quoteString(pattern)}`;
+  const tokens = asciiFold(text).toLowerCase().replace(/[,]/g, ' ').split(/\s+/).filter(Boolean);
+  const parts = [];
+  tokens.forEach((token, i) => {
+    if (i === 0 && /^\d+[a-z]?(\/\d+[a-z]?)?$/.test(token)) {
+      parts.push(`(${like(`${token} %`)} OR ${like(`%/${token} %`)})`);
+    } else if (token.length > 1 || /\d/.test(token)) {
+      const full = ROAD_ABBREVIATIONS[token];
+      parts.push(full ? `(${like(`%${token}%`)} OR ${like(`%${full}%`)})` : like(`%${token}%`));
+    }
+  });
+  return parts.join(' AND ');
+}
+
+/**
+ * Combines conditions and optional spatial restrictions (`bbox`: the map
+ * extent; `near`: a point and radius) into a single filter. Incomplete
+ * conditions are skipped and reported in `errors` keyed by their position.
  * @returns {{cql: string, errors: Map<number, string>}}
  */
-export function buildFilter({ match = 'all', conditions = [], bbox = null }) {
+export function buildFilter({ match = 'all', conditions = [], bbox = null, near = null }) {
   const parts = [];
   const errors = new Map();
   conditions.forEach((c, i) => {
@@ -186,9 +230,7 @@ export function buildFilter({ match = 'all', conditions = [], bbox = null }) {
   if (parts.length === 1) cql = parts[0];
   else if (parts.length > 1) cql = parts.map((p) => `(${p})`).join(match === 'any' ? ' OR ' : ' AND ');
 
-  if (bbox) {
-    const box = bboxCondition(bbox.field, bbox);
-    cql = cql ? `(${cql}) AND ${box}` : box;
-  }
+  const spatial = [bbox && bboxCondition(bbox.field, bbox), near && pointCondition(near.field, near)].filter(Boolean);
+  for (const condition of spatial) cql = cql ? `(${cql}) AND ${condition}` : condition;
   return { cql, errors };
 }
