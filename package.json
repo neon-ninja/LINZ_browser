@@ -1,0 +1,11 @@
+{
+  "name": "linz-data-browser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A static web app for searching, querying and mapping LINZ Data Service datasets.",
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en-NZ">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LINZ Data Browser</title>
+  <meta name="description" content="Search, query and map datasets from the LINZ Data Service.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f6e6e'/%3E%3Cpath d='M8 22l6-12 4 8 3-4 3 8z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="css/styles.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#">
+      <span class="brand-mark" aria-hidden="true"></span>
+      LINZ Data Browser
+    </a>
+    <button type="button" id="key-button" class="key-pill">Add API key</button>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="tabs" role="tablist" aria-label="Datasets">
+        <button type="button" role="tab" id="tab-search" aria-controls="search-panel" aria-selected="true">Search</button>
+        <button type="button" role="tab" id="tab-favourites" aria-controls="favourites-panel" aria-selected="false">
+          Favourites <span id="favourites-count" class="count"></span>
+        </button>
+      </div>
+
+      <section id="search-panel" role="tabpanel" aria-labelledby="tab-search">
+        <form id="search-form" class="search-form" role="search">
+          <input type="search" id="search-q" placeholder="Search datasets, e.g. addresses" aria-label="Search datasets" autocomplete="off">
+        </form>
+        <div class="search-filters">
+          <select id="search-kind" aria-label="Dataset type">
+            <option value="vector,table">Layers &amp; tables</option>
+            <option value="vector">Vector layers</option>
+            <option value="table">Tables</option>
+          </select>
+          <select id="search-sort" aria-label="Sort datasets">
+            <option value="">Best match</option>
+            <option value="popularity">Most popular</option>
+            <option value="updated_at">Recently updated</option>
+            <option value="created_at">Recently added</option>
+            <option value="name">Name A–Z</option>
+          </select>
+        </div>
+        <p id="search-status" class="muted small" aria-live="polite"></p>
+        <ul id="search-results" class="dataset-list"></ul>
+        <button type="button" id="load-more" class="button block" hidden>Load more</button>
+      </section>
+
+      <section id="favourites-panel" role="tabpanel" aria-labelledby="tab-favourites" hidden>
+        <ul id="favourites-list" class="dataset-list"></ul>
+        <p id="favourites-empty" class="empty">
+          Star a dataset (☆) to keep it here. Favourites are saved in this browser.
+        </p>
+      </section>
+    </aside>
+
+    <main id="main">
+      <section id="welcome" class="welcome">
+        <h1>Browse the LINZ Data Service</h1>
+        <p>Find a dataset on the left, then filter it with the query builder. Field names and types come straight from LINZ, so you pick them from lists instead of typing them.</p>
+        <ol>
+          <li><strong>Add your API key</strong> (top right). It's stored only in this browser and sent only to data.linz.govt.nz.</li>
+          <li><strong>Search</strong> for a vector layer or table and open it.</li>
+          <li><strong>Build a query</strong>, run it, and view the results as a table and on a map.</li>
+          <li><strong>Star</strong> the datasets you use often. Your last query on each one is remembered too.</li>
+        </ol>
+      </section>
+
+      <div id="dataset-view" hidden>
+        <p id="dataset-loading" class="muted" hidden>Loading dataset…</p>
+        <div id="dataset-error" class="alert error" role="alert" hidden></div>
+
+        <div id="dataset-body" hidden>
+          <header class="dataset-header">
+            <div class="dataset-heading">
+              <h2 id="ds-title"></h2>
+              <div id="ds-meta" class="chips"></div>
+            </div>
+            <div class="dataset-actions">
+              <button type="button" id="ds-favourite" class="button" aria-pressed="false">☆ Favourite</button>
+              <a id="ds-link" class="button" target="_blank" rel="noopener">Open on LINZ ↗</a>
+            </div>
+          </header>
+
+          <details class="card" id="ds-about">
+            <summary>About this dataset</summary>
+            <div id="ds-description" class="description"></div>
+          </details>
+
+          <details class="card" id="ds-fields-card">
+            <summary>Fields <span id="ds-field-count" class="count"></span></summary>
+            <table class="fields-table">
+              <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+              <tbody id="ds-fields"></tbody>
+            </table>
+          </details>
+
+          <section class="card query" aria-labelledby="query-heading">
+            <h3 id="query-heading">Query</h3>
+            <div id="key-needed" class="alert" hidden>
+              You need a LINZ API key to query data. Browsing the catalogue works without one.
+              <button type="button" class="button small" data-open-key>Add API key</button>
+            </div>
+
+            <div id="builder">
+              <div class="match-row">
+                Match
+                <select id="match" aria-label="Match all or any conditions">
+                  <option value="all">all</option>
+                  <option value="any">any</option>
+                </select>
+                of these conditions:
+              </div>
+              <div id="conditions" class="conditions"></div>
+              <button type="button" id="add-condition" class="button small">+ Add condition</button>
+
+              <label id="bbox-row" class="check-row">
+                <input type="checkbox" id="use-bbox">
+                Only features within the current map view
+              </label>
+            </div>
+
+            <div class="query-options">
+              <label>Sort by
+                <select id="sort-field"></select>
+              </label>
+              <select id="sort-dir" aria-label="Sort direction">
+                <option value="ASC">ascending</option>
+                <option value="DESC">descending</option>
+              </select>
+              <label>Rows per page
+                <select id="limit">
+                  <option>25</option>
+                  <option>50</option>
+                  <option selected>100</option>
+                  <option>250</option>
+                  <option>500</option>
+                  <option>1000</option>
+                </select>
+              </label>
+              <details class="columns-picker" id="columns-picker">
+                <summary id="columns-summary">All columns</summary>
+                <div class="columns-menu">
+                  <div class="columns-menu-actions">
+                    <button type="button" class="link" id="columns-all">All</button>
+                    <button type="button" class="link" id="columns-none">None</button>
+                  </div>
+                  <div id="columns-list"></div>
+                </div>
+              </details>
+            </div>
+
+            <details class="cql-details" id="cql-details">
+              <summary>CQL filter</summary>
+              <p class="muted small">This is the filter sent to LINZ. Tick “Edit by hand” to write any <a href="https://docs.geoserver.org/stable/en/user/filter/ecql_reference.html" target="_blank" rel="noopener">ECQL</a> expression yourself; the conditions above are ignored while it's ticked.</p>
+              <textarea id="cql" rows="3" spellcheck="false" readonly aria-label="CQL filter"></textarea>
+              <label class="check-row"><input type="checkbox" id="cql-manual"> Edit by hand</label>
+            </details>
+
+            <div class="query-actions">
+              <button type="button" id="run-query" class="button primary">Run query</button>
+              <button type="button" id="reset-query" class="button">Reset</button>
+            </div>
+          </section>
+
+          <section class="card results" id="results" aria-labelledby="results-heading">
+            <div class="results-toolbar">
+              <h3 id="results-heading">Results</h3>
+              <span id="results-status" class="muted" aria-live="polite">Run a query to see data.</span>
+              <div class="toolbar-group">
+                <button type="button" id="page-prev" class="button small" disabled>← Prev</button>
+                <button type="button" id="page-next" class="button small" disabled>Next →</button>
+              </div>
+              <div class="toolbar-group">
+                <button type="button" id="download-csv" class="button small" disabled>CSV</button>
+                <button type="button" id="download-geojson" class="button small" disabled>GeoJSON</button>
+                <button type="button" id="copy-url" class="button small" disabled title="Copies the WFS request URL, including your API key">Copy request URL</button>
+              </div>
+            </div>
+            <div id="results-error" class="alert error" role="alert" hidden></div>
+            <code id="request-url" class="request-url" hidden></code>
+            <div id="map" class="map" aria-label="Map of results"></div>
+            <div class="table-wrap">
+              <table id="results-table" class="results-table"></table>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="key-dialog" aria-labelledby="key-dialog-title">
+    <form method="dialog" id="key-form">
+      <h2 id="key-dialog-title">LINZ API key</h2>
+      <p>Querying data needs a free API key from the LINZ Data Service. <a id="key-help" target="_blank" rel="noopener">Get or copy your key ↗</a></p>
+      <label for="key-input">API key</label>
+      <div class="key-input-row">
+        <input type="password" id="key-input" autocomplete="off" spellcheck="false" placeholder="32-character key">
+        <button type="button" id="key-toggle" class="button small" aria-pressed="false">Show</button>
+      </div>
+      <p id="key-status" class="small" aria-live="polite"></p>
+      <p class="muted small">The key is saved in this browser's local storage and is only ever sent to data.linz.govt.nz.</p>
+      <div class="dialog-actions">
+        <button type="button" id="key-remove" class="button danger">Remove key</button>
+        <span class="spacer"></span>
+        <button type="button" id="key-test" class="button">Test</button>
+        <button type="button" id="key-cancel" class="button">Cancel</button>
+        <button type="submit" id="key-save" class="button primary" value="save">Save</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
