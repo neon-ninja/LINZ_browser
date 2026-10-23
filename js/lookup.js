@@ -2,7 +2,7 @@
 // here?" (reverse geocoding: the address, parcel and title at a spot) and the
 // marked location that the query builder can filter by.
 
-import { el } from './dom.js';
+import { copyWithToast, el } from './dom.js';
 import { PARCEL_LAYER, TITLE_LAYER, geocodeAddress, whatsHere } from './linz.js';
 
 const MARK_STYLE = { color: '#a61e4d', weight: 2, fillColor: '#f06595', fillOpacity: 0.9, radius: 7 };
@@ -17,19 +17,7 @@ function distanceNote(feature) {
 }
 
 function copyButton(text) {
-  const button = el('button', {
-    type: 'button',
-    class: 'link',
-    onclick: async () => {
-      try {
-        await navigator.clipboard.writeText(text);
-        button.textContent = 'Copied';
-      } catch {
-        window.prompt('Copy:', text);
-      }
-    },
-  }, 'Copy');
-  return button;
+  return el('button', { type: 'button', class: 'link', onclick: () => copyWithToast(text, `Copied ${text}`) }, 'Copy');
 }
 
 /**

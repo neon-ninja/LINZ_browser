@@ -27,52 +27,58 @@
   </header>
 
   <div class="layout">
-    <aside class="sidebar">
-      <div class="tabs" role="tablist" aria-label="Datasets">
-        <button type="button" role="tab" id="tab-search" aria-controls="search-panel" aria-selected="true">Search</button>
-        <button type="button" role="tab" id="tab-favourites" aria-controls="favourites-panel" aria-selected="false">
-          Favourites <span id="favourites-count" class="count"></span>
-        </button>
-      </div>
-
-      <section id="search-panel" role="tabpanel" aria-labelledby="tab-search">
-        <form id="search-form" class="search-form" role="search">
-          <input type="search" id="search-q" placeholder="Search datasets, e.g. addresses" aria-label="Search datasets" autocomplete="off">
-        </form>
-        <select id="search-category" class="search-category" aria-label="Category">
-          <option value="">All categories</option>
-        </select>
-        <div class="search-filters">
-          <select id="search-kind" aria-label="Dataset type">
-            <option value="vector,table">Layers &amp; tables</option>
-            <option value="vector">Vector layers</option>
-            <option value="table">Tables</option>
-          </select>
-          <select id="search-sort" aria-label="Sort datasets">
-            <option value="">Best match</option>
-            <option value="popularity">Most popular</option>
-            <option value="updated_at">Recently updated</option>
-            <option value="created_at">Recently added</option>
-            <option value="name">Name A–Z</option>
-          </select>
+    <aside class="sidebar" id="sidebar">
+      <button type="button" id="sidebar-toggle" class="sidebar-toggle" aria-expanded="true" aria-controls="sidebar-body">
+        <span id="sidebar-toggle-label">Hide datasets</span>
+        <span class="chevron" aria-hidden="true">▾</span>
+      </button>
+      <div id="sidebar-body">
+        <div class="tabs" role="tablist" aria-label="Datasets">
+          <button type="button" role="tab" id="tab-search" aria-controls="search-panel" aria-selected="true">Search</button>
+          <button type="button" role="tab" id="tab-favourites" aria-controls="favourites-panel" aria-selected="false">
+            Favourites <span id="favourites-count" class="count"></span>
+          </button>
         </div>
-        <p id="search-status" class="muted small" aria-live="polite"></p>
-        <ul id="search-results" class="dataset-list"></ul>
-        <button type="button" id="load-more" class="button block" hidden>Load more</button>
-      </section>
 
-      <section id="favourites-panel" role="tabpanel" aria-labelledby="tab-favourites" hidden>
-        <ul id="favourites-list" class="dataset-list"></ul>
-        <p id="favourites-empty" class="empty">
-          Star a dataset (☆) to keep it here. Favourites are saved in this browser.
-        </p>
-      </section>
+        <section id="search-panel" role="tabpanel" aria-labelledby="tab-search">
+          <form id="search-form" class="search-form" role="search">
+            <input type="search" id="search-q" placeholder="Search datasets, e.g. addresses" aria-label="Search datasets" autocomplete="off">
+          </form>
+          <select id="search-category" class="search-category" aria-label="Category">
+            <option value="">All categories</option>
+          </select>
+          <div class="search-filters">
+            <select id="search-kind" aria-label="Dataset type">
+              <option value="vector,table">Layers &amp; tables</option>
+              <option value="vector">Vector layers</option>
+              <option value="table">Tables</option>
+            </select>
+            <select id="search-sort" aria-label="Sort datasets">
+              <option value="">Best match</option>
+              <option value="popularity">Most popular</option>
+              <option value="updated_at">Recently updated</option>
+              <option value="created_at">Recently added</option>
+              <option value="name">Name A–Z</option>
+            </select>
+          </div>
+          <p id="search-status" class="muted small" aria-live="polite"></p>
+          <ul id="search-results" class="dataset-list"></ul>
+          <button type="button" id="load-more" class="button block" hidden>Load more</button>
+        </section>
+
+        <section id="favourites-panel" role="tabpanel" aria-labelledby="tab-favourites" hidden>
+          <ul id="favourites-list" class="dataset-list"></ul>
+          <p id="favourites-empty" class="empty">
+            Star a dataset (☆) to keep it here. Favourites are saved in this browser.
+          </p>
+        </section>
+      </div>
     </aside>
 
     <main id="main">
       <section id="welcome" class="welcome">
         <h1>Browse the LINZ Data Service</h1>
-        <p>Find a dataset on the left, then filter it with the query builder. Field names and types come straight from LINZ, so you pick them from lists instead of typing them.</p>
+        <p>Find a dataset in the list, then filter it with the query builder. Field names and types come straight from LINZ, so you pick them from lists instead of typing them.</p>
         <ol>
           <li><strong>Add your API key</strong> (top right). It's stored only in this browser and sent only to data.linz.govt.nz.</li>
           <li><strong>Search</strong> for a vector layer or table and open it.</li>
@@ -228,6 +234,18 @@
       </div>
     </main>
   </div>
+
+  <dialog id="row-dialog" class="sheet" aria-labelledby="row-title">
+    <div class="sheet-header">
+      <div>
+        <h2 id="row-title"></h2>
+        <p id="row-subtitle" class="muted small"></p>
+      </div>
+      <button type="button" id="row-close" class="icon-button" aria-label="Close">×</button>
+    </div>
+    <div id="row-actions" class="sheet-actions"></div>
+    <dl id="row-fields" class="row-fields"></dl>
+  </dialog>
 
   <dialog id="key-dialog" aria-labelledby="key-dialog-title">
     <form method="dialog" id="key-form">

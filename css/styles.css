@@ -227,12 +227,46 @@ textarea[readonly] { background: var(--surface-2); }
 
 main { padding: 16px; min-width: 0; }
 
+/* The dataset-list toggle only exists on narrow screens. */
+.sidebar-toggle { display: none; }
+
 @media (max-width: 800px) {
   .layout { grid-template-columns: minmax(0, 1fr); }
   .sidebar {
-    position: static; height: auto; max-height: 55vh;
+    position: static; height: auto; max-height: 60vh;
     border-right: 0; border-bottom: 1px solid var(--border);
+    padding-top: 6px;
   }
+  .sidebar-toggle {
+    display: flex; align-items: center; justify-content: space-between; width: 100%;
+    background: none; border: 0; padding: 8px 0; margin-bottom: 6px;
+    color: var(--text); font-weight: 600; cursor: pointer;
+  }
+  .sidebar-toggle .chevron { transition: transform 0.15s; }
+  .sidebar.collapsed { padding-bottom: 0; }
+  .sidebar.collapsed .sidebar-toggle { margin-bottom: 0; }
+  .sidebar.collapsed .chevron { transform: rotate(-90deg); }
+  .sidebar.collapsed #sidebar-body { display: none; }
+
+  .map { height: min(380px, 55vh); }
+  #welcome-map-slot .map { height: min(460px, 60vh); }
+  .welcome { padding: 8px 0; }
+  .welcome h1 { font-size: 22px; }
+}
+
+@media (max-width: 640px) {
+  .request-url { display: none; }
+  .results-toolbar .toolbar-group:first-of-type { margin-left: 0; }
+  .columns-menu { max-width: calc(100vw - 32px); }
+}
+
+/* Bigger tap targets on touch screens. */
+@media (pointer: coarse) {
+  .icon-button { min-width: 40px; min-height: 40px; }
+  .button.small { min-height: 36px; padding: 6px 12px; }
+  .dataset-list .open { padding: 10px 8px; }
+  .results-table th, .results-table td { padding: 8px; }
+  .tabs button { padding: 10px 12px; }
 }
 
 /* Sidebar */
@@ -398,6 +432,8 @@ details.card[open] > summary { margin-bottom: 8px; }
 .map {
   height: 380px; margin-top: 10px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--surface-2);
+  /* Keep Leaflet's z-indexed panes and controls under the sticky header. */
+  isolation: isolate;
 }
 .leaflet-container { font: inherit; }
 .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--text); }
@@ -449,6 +485,14 @@ details.card[open] > summary { margin-bottom: 8px; }
 .results-table th .link { color: inherit; font: inherit; text-decoration: none; }
 .results-table th .link:hover { text-decoration: underline; }
 .results-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* The details button stays visible while the table scrolls sideways. */
+.results-table .row-actions {
+  position: sticky; left: 0; z-index: 1; width: 1%;
+  padding: 0 2px; background: var(--surface); border-right: 1px solid var(--border);
+}
+.results-table th.row-actions { z-index: 2; background: var(--surface-2); }
+.results-table tbody tr:hover .row-actions, .results-table tbody tr.selected .row-actions { background: inherit; }
+.results-table .row-actions .icon-button { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; }
 .results-table td.null { color: var(--muted); }
 .results-table tbody tr { cursor: pointer; }
 .results-table tbody tr:hover { background: var(--surface-2); }
@@ -473,3 +517,44 @@ dialog label { display: block; font-weight: 600; font-size: 14px; margin-bottom:
 #key-status.bad { color: var(--danger); }
 .dialog-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
 .dialog-actions .spacer { flex: 1; }
+
+/* Row details sheet: a centred dialog, docked to the bottom on phones. */
+dialog.sheet { width: min(600px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; padding: 16px 20px 20px; }
+.sheet-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sheet-header h2 { font-size: 18px; margin: 0; overflow-wrap: anywhere; }
+.sheet-header p { margin: 2px 0 0; font-family: var(--mono); }
+.sheet-header .icon-button { font-size: 24px; margin: -6px -8px 0 0; }
+.sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.row-fields { margin: 0; border-top: 1px solid var(--border); }
+.row-fields > div {
+  display: grid; grid-template-columns: minmax(100px, 34%) minmax(0, 1fr) auto;
+  gap: 4px 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);
+}
+.row-fields dt { font-family: var(--mono); font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.row-fields dd { margin: 0; overflow-wrap: anywhere; }
+.row-fields .icon-button { display: inline-flex; align-items: center; justify-content: center; }
+
+@media (max-width: 640px) {
+  dialog.sheet {
+    width: 100%; max-width: 100%; max-height: 88vh; margin: auto 0 0;
+    border-radius: 14px 14px 0 0; border-bottom: 0; padding: 14px 16px 24px;
+  }
+  .row-fields > div { grid-template-columns: minmax(0, 1fr) auto; }
+  .row-fields dt { grid-column: 1 / -1; }
+}
+
+.toast {
+  position: fixed; left: 50%; bottom: 24px; z-index: 5000;
+  transform: translate(-50%, 12px); opacity: 0; pointer-events: none;
+  background: var(--text); color: var(--bg); border-radius: 8px; padding: 8px 14px;
+  font-size: 14px; box-shadow: 0 4px 16px rgb(0 0 0 / 25%); transition: opacity 0.15s, transform 0.15s;
+  max-width: calc(100vw - 32px);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Last, so it beats the smaller sizes above: 16px text stops iOS zooming in
+   when a field is focused. */
+@media (max-width: 800px) {
+  input, select, textarea,
+  .search-category, .search-filters select, .lookup-search .lookup-input { font-size: 16px; }
+}

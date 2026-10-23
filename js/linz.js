@@ -194,6 +194,7 @@ export function normaliseDataset(d) {
     featureCount: Number.isFinite(data.feature_count) ? data.feature_count : null,
     crs: data.crs?.id || null,
     extent: geometryBounds(data.extent),
+    primaryKeys: data.primary_key_fields || [],
     licensed: false,
   };
 }
@@ -239,6 +240,7 @@ export function datasetFromSchema(type, id, schema, title) {
     featureCount: null,
     crs: null,
     extent: null,
+    primaryKeys: [],
     detailsHidden: true,
     licensed: true,
   };

@@ -53,6 +53,15 @@ talks to the LINZ APIs directly from your browser.
   click a feature to find its row.
 - Download the current page as CSV or GeoJSON, or copy the WFS request URL to
   use in QGIS, curl, etc.
+- **Copy or share a row.** The ⋯ button on each row (or tapping a row on a
+  phone) opens its details: every field with its own copy button, plus
+  *Share* (the phone's share sheet), *Copy details* (all fields as text),
+  *Copy link*, *Copy JSON*, *Show on map* and *Find address*. Row links look
+  like `…/#/layer/50804?id=961395` and open the app filtered to that row; any
+  `field=value` pairs work, e.g. `#/layer/50804?title_no=CB22A%2F485`.
+- **Works on phones.** On narrow screens the dataset list collapses once a
+  dataset is open, fields use 16px text so iOS doesn't zoom in, tap targets
+  are larger and the details open as a bottom sheet.
 
 ## Getting an API key
 
@@ -129,9 +138,11 @@ js/lookup.js      map address search, What's here?, the marked location
 js/linz.js        LINZ catalogue, WFS and Query API client (incl. geocoding)
 js/cql.js         turns query-builder conditions into ECQL
 js/geo.js         geometry helpers (bounds, point in polygon, point on surface)
-js/dom.js         tiny DOM helpers
+js/share.js       row links, shared-link routes and copy text
+js/icons.js       Octicons icon paths
+js/dom.js         tiny DOM helpers (elements, icons, copy, toast)
 js/storage.js     localStorage helpers (key, favourites, last queries)
-tests/            unit tests for cql.js, geo.js and linz.js
+tests/            unit tests for cql.js, geo.js, linz.js and share.js
 ```
 
 [Leaflet](https://leafletjs.com) (from cdnjs) draws the map.

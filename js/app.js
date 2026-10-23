@@ -1,11 +1,15 @@
 import { buildFilter, operatorArity, operatorsFor } from './cql.js';
-import { $, el, svgIcon } from './dom.js';
+import { $, copyWithToast, el, svgIcon } from './dom.js';
 import { pointOnSurface } from './geo.js';
+import * as icons from './icons.js';
 import {
   ADDRESS_LAYER, API_KEY_HELP_URL, LDS_ORIGIN, addressesForFeature, countFeatures, findLicensed, getCategories,
   getDataset, getFeatures, sampleValues, searchDatasets, standaloneWfsUrl, testApiKey, typeName,
 } from './linz.js';
 import { createLookup } from './lookup.js';
+import {
+  featureKey, parseRoute, rowLink, rowText,
+} from './share.js';
 import { load, loadQuery, save, saveQuery } from './storage.js';
 
 const numberFormat = new Intl.NumberFormat('en-NZ');
@@ -16,13 +20,20 @@ function formatDate(iso) {
   return d && !Number.isNaN(d.getTime()) ? dateFormat.format(d) : '';
 }
 
-// Octicons "lock" (MIT licence).
-const LOCK_ICON = 'M4 4a4 4 0 0 1 8 0v2h.25c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.784 2.784 6 3.75 6H4Zm8.25 3.5h-8.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25ZM10.5 6V4a2.5 2.5 0 1 0-5 0v2Z';
 const LICENSED_NOTE = 'Licensed dataset: only available to API keys that LINZ has granted access to';
 
 function licensedBadge() {
   return el('span', { class: 'licensed', title: LICENSED_NOTE },
-    svgIcon(LOCK_ICON), el('span', { class: 'visually-hidden' }, 'Licensed: '));
+    svgIcon(icons.LOCK), el('span', { class: 'visually-hidden' }, 'Licensed: '));
+}
+
+// Phones and narrow windows: one column, the dataset list collapses while a dataset is open.
+const narrowScreen = window.matchMedia('(max-width: 800px)');
+
+function setSidebarOpen(open) {
+  $('sidebar').classList.toggle('collapsed', !open);
+  $('sidebar-toggle').setAttribute('aria-expanded', String(open));
+  $('sidebar-toggle-label').textContent = open ? 'Hide datasets' : 'Browse datasets';
 }
 
 const KIND_LABELS = { vector: 'Vector layer', table: 'Table', raster: 'Raster layer', grid: 'Grid layer' };
@@ -378,12 +389,18 @@ function openWithConditions(type, id, conditions) {
     return;
   }
   pendingQuery = { key: `${type}-${id}`, query };
-  location.hash = `#/${type}/${id}`;
+  const hash = `#/${type}/${id}`;
+  if (location.hash === hash) openDataset(type, id);
+  else location.hash = hash;
 }
 
 async function openDataset(type, id) {
   const token = ++datasetToken;
   queryController?.abort();
+  if (narrowScreen.matches) {
+    setSidebarOpen(false);
+    window.scrollTo(0, 0);
+  }
   $('welcome').hidden = true;
   $('dataset-view').hidden = false;
   $('dataset-loading').hidden = false;
@@ -429,6 +446,7 @@ function showWelcome() {
   resultsLayer = null;
   map?.closePopup();
   placeMap('welcome-map-slot');
+  setSidebarOpen(true);
   renderSearchResults();
   renderFavourites();
 }
@@ -448,7 +466,7 @@ function renderDataset() {
     d.license?.title,
   ].filter(Boolean);
   $('ds-meta').replaceChildren(
-    ...(d.licensed ? [el('span', { class: 'chip licensed-chip', title: LICENSED_NOTE }, svgIcon(LOCK_ICON), 'Licensed')] : []),
+    ...(d.licensed ? [el('span', { class: 'chip licensed-chip', title: LICENSED_NOTE }, svgIcon(icons.LOCK), 'Licensed')] : []),
     ...chips.map((c) => el('span', { class: 'chip' }, c)),
   );
   $('ds-link').href = d.url;
@@ -914,7 +932,7 @@ function renderResults({ fitMap }) {
   $('request-url').textContent = r.url;
   $('request-url').hidden = false;
 
-  const head = el('thead', {}, el('tr', {}, r.columns.map((name) => {
+  const head = el('thead', {}, el('tr', {}, el('th', { class: 'row-actions' }, el('span', { class: 'visually-hidden' }, 'Details')), r.columns.map((name) => {
     const sorted = sortField === name;
     return el('th', { scope: 'col', 'aria-sort': sorted ? (sortDir === 'DESC' ? 'descending' : 'ascending') : null },
       el('button', {
@@ -924,10 +942,20 @@ function renderResults({ fitMap }) {
         onclick: () => sortBy(name),
       }, name, sorted ? (sortDir === 'DESC' ? ' ▼' : ' ▲') : ''));
   })));
+  // On narrow screens the map is out of sight, so tapping a row opens its details instead.
   const body = el('tbody', {}, r.features.map((feature, i) => el('tr', {
     'data-index': i,
-    onclick: () => selectFeature(i),
-  }, r.columns.map((name) => {
+    onclick: () => (narrowScreen.matches ? openRowDetails(i) : selectFeature(i)),
+  }, el('td', { class: 'row-actions' }, el('button', {
+    type: 'button',
+    class: 'icon-button',
+    'aria-label': 'Details, copy and share',
+    title: 'Details, copy and share',
+    onclick: (e) => {
+      e.stopPropagation();
+      openRowDetails(i);
+    },
+  }, svgIcon(icons.KEBAB))), r.columns.map((name) => {
     const { text, className } = formatCell(feature.properties?.[name]);
     return el('td', { class: className || null, title: text.length > 40 ? text : null }, text);
   }))));
@@ -983,8 +1011,9 @@ function renderAddressCell(index) {
     cell.textContent = addressText(entry);
     cell.title = entry?.addresses?.join('\n') || '';
   }
-  const popupText = document.querySelector(`.feature-popup[data-index="${index}"] .popup-address`);
-  if (popupText) popupText.textContent = addressText(entry);
+  for (const node of document.querySelectorAll(`.feature-popup[data-index="${index}"] .popup-address, #row-fields[data-index="${index}"] .row-address`)) {
+    node.textContent = addressText(entry);
+  }
 }
 
 /** Looks up (once) the address for one result feature. */
@@ -1001,6 +1030,97 @@ async function findAddressFor(index, signal) {
     r.addresses[index] = { error: err.message };
   }
   if (state.results === r) renderAddressCell(index);
+}
+
+// ---------------------------------------------------------------------------
+// Row details: every field, with ways to copy or share them
+
+function appBaseUrl() {
+  return `${location.origin}${location.pathname}`;
+}
+
+function openRowDetails(index) {
+  const r = state.results;
+  const d = state.dataset;
+  const feature = r?.features[index];
+  if (!feature) return;
+  const key = featureKey(d, feature);
+  const link = key ? rowLink(appBaseUrl(), d, key) : null;
+  const point = feature.geometry ? pointOnSurface(feature.geometry) : null;
+  const location = point ? `${point[1].toFixed(6)}, ${point[0].toFixed(6)}` : null;
+  const fields = Object.entries(feature.properties || {})
+    .filter(([, v]) => v !== null && v !== undefined && v !== '')
+    .map(([name, v]) => [name, formatCell(v).text]);
+  const title = key ? `${d.title} · ${key.field} ${key.value}` : d.title;
+  const summary = (withLink) => rowText({
+    title, fields, location, address: addressExport(r.addresses?.[index]) || null, link: withLink ? link : null,
+  });
+
+  $('row-title').textContent = d.title;
+  $('row-subtitle').textContent = key ? `${key.field} ${key.value}` : `Row ${(r.query.startIndex || 0) + index + 1}`;
+
+  const action = (label, onclick, primary = false) =>
+    el('button', { type: 'button', class: `button small${primary ? ' primary' : ''}`, onclick }, label);
+  const canFindAddress = Boolean(feature.geometry) && !$('find-addresses').hidden && r.addresses?.[index] === undefined;
+  const findButton = canFindAddress && action('Find address', async () => {
+    findButton.disabled = true;
+    await findAddressFor(index, queryController?.signal);
+    findButton.remove();
+  });
+  $('row-actions').replaceChildren(...[
+    navigator.share && action('Share', () => {
+      navigator.share({ title, text: summary(false), ...(link ? { url: link } : {}) }).catch(() => {});
+    }, true),
+    action('Copy details', () => copyWithToast(summary(true), 'Details copied')),
+    link && action('Copy link', () => copyWithToast(link, 'Link copied')),
+    action('Copy JSON', () => copyWithToast(JSON.stringify(feature.properties, null, 2), 'JSON copied')),
+    feature.geometry && map && action('Show on map', () => {
+      $('row-dialog').close();
+      $('map').scrollIntoView({ block: 'center', behavior: 'smooth' });
+      selectFeature(index);
+    }),
+    findButton,
+  ].filter(Boolean));
+
+  const copyValue = (name, value) => el('button', {
+    type: 'button',
+    class: 'icon-button',
+    'aria-label': `Copy ${name}`,
+    title: `Copy ${name}`,
+    onclick: () => copyWithToast(value, `Copied ${name}`),
+  }, svgIcon(icons.COPY));
+  const entry = (name, value, extra = {}) => el('div', {},
+    el('dt', {}, name),
+    el('dd', extra, value),
+    copyValue(name, value));
+  const rows = fields.map(([name, value]) => entry(name, value));
+  const looked = r.addresses?.[index];
+  if (feature.geometry && (looked !== undefined || canFindAddress)) {
+    rows.push(el('div', {}, el('dt', {}, 'address (looked up)'),
+      el('dd', { class: 'row-address' }, looked !== undefined ? addressText(looked) : 'Not looked up yet')));
+  }
+  if (location) {
+    rows.push(el('div', {},
+      el('dt', {}, 'location'),
+      el('dd', {}, location, ' ', el('a', {
+        href: `https://www.openstreetmap.org/?mlat=${point[1]}&mlon=${point[0]}#map=18/${point[1]}/${point[0]}`,
+        target: '_blank',
+        rel: 'noopener',
+      }, 'map ↗')),
+      copyValue('location', location)));
+  }
+  $('row-fields').replaceChildren(...rows);
+  $('row-fields').dataset.index = String(index);
+  $('row-dialog').showModal();
+}
+
+function initRowDialog() {
+  const dialog = $('row-dialog');
+  $('row-close').addEventListener('click', () => dialog.close());
+  // Tapping the backdrop closes the sheet.
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) dialog.close();
+  });
 }
 
 /** Runs `task` over `items` with at most `limit` running at once. */
@@ -1077,16 +1197,8 @@ function initResults() {
       : r.features;
     download(resultFilename('geojson'), 'application/geo+json', JSON.stringify({ type: 'FeatureCollection', features }));
   });
-  $('copy-url').addEventListener('click', async () => {
-    const button = $('copy-url');
-    try {
-      await navigator.clipboard.writeText(standaloneWfsUrl(state.results.url, state.apiKey));
-      button.textContent = 'Copied';
-      setTimeout(() => { button.textContent = 'Copy request URL'; }, 1500);
-    } catch {
-      window.prompt('Copy this URL (it includes your API key):', standaloneWfsUrl(state.results.url, state.apiKey));
-    }
-  });
+  $('copy-url').addEventListener('click', () =>
+    copyWithToast(standaloneWfsUrl(state.results.url, state.apiKey), 'Request URL copied (it includes your API key)'));
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,6 +1280,14 @@ function popupContent(feature, index) {
     el('table', {}, rows),
     showAddress && el('p', { class: 'popup-address' }, r.addresses?.[index] !== undefined ? addressText(r.addresses[index]) : ''),
     el('div', { class: 'here-actions' },
+      el('button', {
+        type: 'button',
+        class: 'button small',
+        onclick: () => {
+          map.closePopup();
+          openRowDetails(index);
+        },
+      }, 'Details & share'),
       showAddress && r.addresses?.[index] === undefined && findButton,
       feature.geometry && el('button', {
         type: 'button',
@@ -1231,14 +1351,20 @@ function highlightFeature(index, { zoom }) {
 // Routing: #/layer/50804 or #/table/114085
 
 function route() {
-  const m = /^#\/(layer|table)\/(\d+)/.exec(location.hash);
-  if (!m) {
+  const r = parseRoute(location.hash);
+  if (!r) {
     showWelcome();
     return;
   }
-  const [, type, id] = m;
-  if (state.dataset && state.dataset.type === type && String(state.dataset.id) === id) return;
-  openDataset(type, Number(id));
+  if (r.filters.length) {
+    // A shared row link (#/layer/50804?id=961395): open the dataset filtered to
+    // it, and drop the filter from the address so a reload doesn't re-apply it.
+    history.replaceState(null, '', `#/${r.type}/${r.id}`);
+    openWithConditions(r.type, r.id, r.filters);
+    return;
+  }
+  if (state.dataset && state.dataset.type === r.type && state.dataset.id === r.id) return;
+  openDataset(r.type, r.id);
 }
 
 function init() {
@@ -1247,6 +1373,8 @@ function init() {
   initQueryBuilder();
   initResults();
   initMap();
+  initRowDialog();
+  $('sidebar-toggle').addEventListener('click', () => setSidebarOpen($('sidebar').classList.contains('collapsed')));
   $('lookup-card').addEventListener('toggle', () => map?.invalidateSize());
   loadCategories();
   $('ds-favourite').addEventListener('click', () => toggleFavourite(state.dataset));
