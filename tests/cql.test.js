@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addressSearchFilter, asciiFold, bboxCondition, buildCondition, buildFilter, fieldKind, operatorArity, operatorsFor,
+  addressSearchFilter, asciiFold, bboxCondition, buildCondition, buildFilter, extentCondition, fieldKind, operatorArity,
+  operatorsFor,
   pointCondition, quoteIdent, quoteString,
 } from '../js/cql.js';
 
@@ -110,14 +111,20 @@ test('buildFilter joins conditions and reports incomplete ones', () => {
   assert.equal(buildFilter({ conditions: [] }).cql, '');
 });
 
-test('map extent becomes a WGS84 BBOX', () => {
-  const box = { field: 'shape', west: 174.7612345678, south: -36.9, east: 174.8, north: -36.8 };
+test('bboxCondition (used for point layers) is in lon/lat order', () => {
+  const box = { west: 174.7612345678, south: -36.9, east: 174.8, north: -36.8 };
   assert.equal(bboxCondition('shape', box), "BBOX(shape,174.761235,-36.9,174.8,-36.8,'EPSG:4326')");
+});
+
+test('map extent becomes an exact INTERSECTS with a WGS84 polygon', () => {
+  const box = { field: 'shape', west: 174.7612345678, south: -36.9, east: 174.8, north: -36.8 };
+  const polygon = 'INTERSECTS(shape, SRID=4326;POLYGON((174.761235 -36.9, 174.8 -36.9, 174.8 -36.8, 174.761235 -36.8, 174.761235 -36.9)))';
+  assert.equal(extentCondition('shape', box), polygon);
   assert.equal(
     buildFilter({ match: 'any', conditions: [{ field: 'a', type: 'string', op: 'eq', value: 'x' }, { field: 'a', type: 'string', op: 'eq', value: 'y' }], bbox: box }).cql,
-    "((a = 'x') OR (a = 'y')) AND BBOX(shape,174.761235,-36.9,174.8,-36.8,'EPSG:4326')",
+    `((a = 'x') OR (a = 'y')) AND ${polygon}`,
   );
-  assert.equal(buildFilter({ bbox: box }).cql, "BBOX(shape,174.761235,-36.9,174.8,-36.8,'EPSG:4326')");
+  assert.equal(buildFilter({ bbox: box }).cql, polygon);
 });
 
 test('pointCondition uses an SRID-tagged WGS84 point', () => {

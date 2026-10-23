@@ -161,10 +161,24 @@ function round(n) {
   return Number(n.toFixed(6));
 }
 
-/** BBOX predicate in WGS84 longitude/latitude order. */
+/**
+ * BBOX predicate in WGS84 longitude/latitude order. LINZ evaluates BBOX
+ * loosely, comparing each feature's bounding box rather than its shape, so
+ * it's only exact for points; use extentCondition() for other geometries.
+ */
 export function bboxCondition(geometryField, { west, south, east, north }) {
   const coords = [west, south, east, north].map(round).join(',');
   return `BBOX(${quoteIdent(geometryField)},${coords},'EPSG:4326')`;
+}
+
+/**
+ * Features whose geometry actually overlaps a WGS84 rectangle (such as the
+ * map view). Unlike BBOX this tests the real shape, so a multipolygon title
+ * spread across a district doesn't match a small box inside its bounds.
+ */
+export function extentCondition(geometryField, { west, south, east, north }) {
+  const [w, s, e, n] = [west, south, east, north].map(round);
+  return `INTERSECTS(${quoteIdent(geometryField)}, SRID=4326;POLYGON((${w} ${s}, ${e} ${s}, ${e} ${n}, ${w} ${n}, ${w} ${s})))`;
 }
 
 /**
@@ -230,7 +244,7 @@ export function buildFilter({ match = 'all', conditions = [], bbox = null, near 
   if (parts.length === 1) cql = parts[0];
   else if (parts.length > 1) cql = parts.map((p) => `(${p})`).join(match === 'any' ? ' OR ' : ' AND ');
 
-  const spatial = [bbox && bboxCondition(bbox.field, bbox), near && pointCondition(near.field, near)].filter(Boolean);
+  const spatial = [bbox && extentCondition(bbox.field, bbox), near && pointCondition(near.field, near)].filter(Boolean);
   for (const condition of spatial) cql = cql ? `(${cql}) AND ${condition}` : condition;
   return { cql, errors };
 }

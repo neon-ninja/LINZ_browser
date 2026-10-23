@@ -712,6 +712,7 @@ function currentSpatial() {
   const q = state.query;
   if (!d.geometryField || !map) return {};
   if (q.location === 'view') {
+    map.invalidateSize(); // make sure the bounds reflect the map's real size
     const b = map.getBounds();
     return { bbox: { field: d.geometryField, west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() } };
   }
@@ -1226,6 +1227,10 @@ function initMap() {
   map.on('moveend', () => {
     if (state.dataset && state.query?.location === 'view') updateCql();
   });
+  // Leaflet caches the map's size. Without this, a map created while hidden
+  // (opening the app straight onto a dataset) stays 0×0, and the "current
+  // map view" collapses to a single point.
+  new ResizeObserver(() => map.invalidateSize()).observe($('map'));
   lookup = createLookup(map, {
     getApiKey: () => state.apiKey,
     onMark: (marker) => {
@@ -1256,9 +1261,11 @@ function initMap() {
 
 /** Moves the map into a placeholder: the welcome page, the results card or the table lookup panel. */
 function placeMap(slotId) {
+  if (!map) return;
   const slot = $(slotId);
-  if (!map || $('map').parentElement === slot) return;
-  slot.append($('map'));
+  if ($('map').parentElement !== slot) slot.append($('map'));
+  // Re-measure now (not just on the next resize callback), so a fitBounds()
+  // or map-view filter straight after this uses the real size.
   map.invalidateSize();
 }
 

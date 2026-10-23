@@ -104,6 +104,7 @@ GitHub Pages → Run workflow).
 | Find an address | WFS `GetFeature` on NZ Addresses (layer 123113) with `ILIKE` filters on `full_address_ascii` |
 | What's here? | Vector Query API: `GET /services/query/v1/vector.json?layer=123113&layer=50772&layer=50804&x=…&y=…&radius=100` (NZ Addresses, NZ Primary Parcels, NZ Property Titles) |
 | Address for a polygon | WFS `GetFeature` on NZ Addresses with a `BBOX` filter, then a point-in-polygon test in the browser; the Query API for the nearest address otherwise |
+| Within the current map view | `cql_filter` with `INTERSECTS(shape, SRID=4326;POLYGON((…)))` built from the map's bounds (not `BBOX`, which LINZ evaluates against each feature's bounding box, so big multipolygons such as titles would match views they don't touch) |
 | At / near the marked location | `cql_filter` with `INTERSECTS(shape, SRID=4326;POINT(lon lat))` or `DWITHIN(…, metres, meters)` |
 
 Both APIs allow cross-origin requests, so no proxy server is needed. The browser
